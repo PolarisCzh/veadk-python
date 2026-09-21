@@ -23,8 +23,10 @@ export interface RemoteConnection {
   /** Preferred: an AgentKit runtime routed through the server-side proxy. When
    *  set, `base`/`apiKey` are unused and the apikey stays server-side. */
   runtimeId?: string;
+  mpaInstanceId?: string;
   region?: string;
   currentVersion?: number | null;
+  agentCategory?: "general" | "mpa";
   apps: string[];
   /** Optional app ID -> friendly name mapping (e.g., "a_1" -> "a_1-4zkzsezc") */
   appLabels?: Record<string, string>;
@@ -39,6 +41,7 @@ export interface AgentEntry {
   remote: boolean;
   host?: string; // remote host, for display
   runtimeId?: string;
+  mpaInstanceId?: string;
   region?: string;
   currentVersion?: number | null;
   /** Server-authorized permission for Studio-managed Runtime deletion. */
@@ -55,6 +58,8 @@ interface ConnectRuntimeOptions {
   waitForReady?: boolean;
   /** Friendly ADK Agent label. Runtime resource names may include a suffix. */
   agentName?: string;
+  agentCategory?: "general" | "mpa";
+  mpaInstanceId?: string;
 }
 
 export function loadConnections(): RemoteConnection[] {
@@ -97,7 +102,13 @@ export function registerConnections(conns: RemoteConnection[]): void {
       registerRemoteApp(
         remoteAppId(c.id, app),
         c.runtimeId
-          ? { app, runtimeId: c.runtimeId, region: c.region! }
+          ? {
+              app,
+              runtimeId: c.runtimeId,
+              mpaInstanceId: c.mpaInstanceId,
+              region: c.region!,
+              agentCategory: c.agentCategory,
+            }
           : { app, base: c.base, apiKey: c.apiKey },
       );
     }
@@ -115,7 +126,12 @@ export function addRuntimeConnection(
   apps: string[],
   appLabels?: Record<string, string>,
   currentVersion?: number | null,
+  agentCategory?: "general" | "mpa",
+  mpaInstanceId?: string,
 ): RemoteConnection {
+  const list = loadConnections();
+  const existingIndex = list.findIndex((item) => item.runtimeId === runtimeId);
+  const previous = existingIndex === -1 ? undefined : list[existingIndex];
   const conn: RemoteConnection = {
     id: `rt_${runtimeId}`,
     name: name || runtimeId,
@@ -124,9 +140,9 @@ export function addRuntimeConnection(
     apps,
     appLabels,
     currentVersion,
+    agentCategory: agentCategory ?? previous?.agentCategory,
+    mpaInstanceId: mpaInstanceId?.trim() || previous?.mpaInstanceId,
   };
-  const list = loadConnections();
-  const existingIndex = list.findIndex((item) => item.runtimeId === runtimeId);
   if (existingIndex === -1) list.push(conn);
   else list[existingIndex] = conn;
   persist(list);
@@ -140,6 +156,8 @@ async function connectRuntimeOnce(
   region: string,
   currentVersion?: number | null,
   agentName?: string,
+  agentCategory?: "general" | "mpa",
+  mpaInstanceId?: string,
 ): Promise<string> {
   let apps: string[] | null = null;
   let resolvedRegion = region || "cn-beijing";
@@ -189,6 +207,8 @@ async function connectRuntimeOnce(
     apps,
     labels,
     currentVersion,
+    agentCategory,
+    mpaInstanceId,
   );
   return remoteAppId(connection.id, apps[0]);
 }
@@ -214,6 +234,8 @@ export async function connectRuntime(
         region,
         currentVersion,
         options.agentName,
+        options.agentCategory,
+        options.mpaInstanceId,
       );
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
@@ -295,6 +317,8 @@ export function buildAgentEntries(
         runtimeId: c.runtimeId,
         region: c.region,
         currentVersion: c.currentVersion,
+        agentCategory: c.agentCategory,
+        mpaInstanceId: c.mpaInstanceId,
       };
     }),
   );
