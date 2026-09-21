@@ -815,6 +815,7 @@ def test_project_handoff_pairing_authorizes_only_terminal_session_routes(
     assert "/web/sandbox/codex-project-handoff/sessions" in captured["exempt_paths"]
     assert "/web/sandbox/codex-project-handoff/sessions/" in captured["exempt_prefixes"]
     assert "/web/sandbox/codex-project-handoff/pairings" not in captured["exempt_paths"]
+    assert "/oauth/callback" in captured["exempt_paths"]
 
 
 def test_github_app_webhook_bypasses_studio_sso(
