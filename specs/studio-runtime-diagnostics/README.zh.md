@@ -2,7 +2,7 @@
 
 - **Component ID：** `studio-runtime-diagnostics`
 - **状态：** 草案；提议变更由关联 PRD 管理
-- **修订日期：** 2026-09-12
+- **修订日期：** 2026-09-22
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **负责代码：** `frontend/server/runtime_logs.py`、`frontend/src/ui/RuntimeLogsDialog.tsx`、`veadk/cli/runtime_a2a_stream.py`、`frontend/src/adk/tokenUsage.ts`、`frontend/src/ui/TraceDrawer.tsx` 以及 `veadk/cli/cli_frontend.py` 中的 Runtime A2A BFF
@@ -40,3 +40,17 @@
 - `CON-6`：A2A 桥接在等待上游前输出非终止 connecting 状态。对话通过现有进度占位将 connecting/submitted/working 展示为等待/排队/执行中。状态不算答案或接受请求的证明，实际内容替换占位。有效流等待完成、错误或取消，不自动重试。
 
 - `CON-7`：已授权 Runtime 代理请求使用 Studio 主体 owner 作为 x-user-id，与任务管理归属一致，浏览器身份头不得覆盖。
+
+- `CON-8`（已实现）：MPA A2A 流中非空的 sandbox `invocation.completed.payload.finalMessage` 投影为合并的 `turnComplete` 答案，保留 sandbox invocationId；兼容旧 `text`/`message` payload。仅省略与该任务已知 sandbox final 去除首尾空白后完全相同的后续完整答案文本 part。保留不同/扩展文本、推理、partial 增量、工具/错误及用量/状态事件。空、失败、取消和没有任务标识的事件不能取得此所有权。已标识的 sandbox 源事件在 artifact 更新和任务快照之间按任务仅投影一次。状态仅在本次 decoder/请求内，完成、断连或取消后销毁。非 MPA 和直接 ADK/原生会话行为不变。
+
+`CON-8` 由 [MPA A2A 最终回答所有权](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-a2a-final.zh.md) 维护，在 `tests/cli/test_runtime_a2a_stream.py` 及跨层前端回放中验证。本次新增不代表其他草案契约已实现。
+
+- `CON-9`（已实现）：探测为 `a2a-default` 的 Runtime 应用通过 A2A 桥接创建/列表/读取/删除/运行会话，并跳过原生执行配置前置查询，不受 MPA 类型/实例信息影响。其他 MPA 应用保留原生 Profile/session/run/SSE 行为，普通 ADK 应用不变。错误和取消不切换协议。不涉及会话迁移、鉴权或持久化变更。参见 [A2A 会话路由](../../prd-spec/bugfixes/studio-session-protocol/2026-09-22-a2a-session-routing.zh.md) 和 `frontend/tests/runSseAbort.test.mjs`。
+
+- `CON-10`（已实现）：显式 MPA A2A 转录模式合并相邻匹配/扩展的外层完整推理快照，并按一条用户请求判断空回复提示。保留 partial 增量及 sandbox 事件；真正空的已结束请求保留一次提示。通用 ADK/A2A 和原生 MPA 的默认行为不变。参见 [MPA A2A 推理](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-a2a-reasoning.zh.md)。 MPA 沙箱完整事件不含权威推理文本时，在替换答案预览的同时保留临时预览区的 thinking 块，避免最终答案到达后丢失不同的沙箱推理；权威推理快照仍采用替换语义。 显式 MPA A2A 桥接模式按来源归一化外层多 part 推理快照，并与沙箱调用阶段隔离。追加元数据 `reasoningSegmentId` 让迟于 tool.call 的沙箱推理尾部仍属于原块；工具结果和答案增量分隔阶段。通用/默认解码不变。
+
+- `CON-11`（已实现）：MPA A2A 将相邻助手片段显示为一个回复和一套底栏，按来源统计本轮用量，使用最后可见答案的反馈身份及最新会话轨迹截止时间。原 turn 和通用智能体行为不变。参见[回复合并](../../prd-spec/features/mpa-response-grouping/2026-09-22-mpa-response-grouping.zh.md)。
+
+CON-8/CON-11 修正（已实现）：保留 sandbox 完成后的不同外层文本与推理。桥接只去重完全相同的完整答案 part；MPA 合并视图可以隐藏完全相同的答案副本，但不改变原 turn，片段扩展后完整恢复。通用 Codex 工具行为恢复。参见[保留补充内容](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-preserve-followup-content.zh.md)。
+
+- [MPA 推理快照归一化](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-reasoning-snapshots.zh.md).

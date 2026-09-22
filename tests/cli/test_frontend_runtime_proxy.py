@@ -3753,6 +3753,15 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     requests: list[dict[str, Any]] = []
+    from veadk.cli.runtime_a2a_stream import A2AStreamDecoder
+
+    decoder_modes: list[bool] = []
+
+    def recording_decoder(*, mpa_a2a: bool = False) -> A2AStreamDecoder:
+        decoder_modes.append(mpa_a2a)
+        return A2AStreamDecoder(mpa_a2a=mpa_a2a)
+
+    monkeypatch.setattr("veadk.cli.cli_frontend.A2AStreamDecoder", recording_decoder)
 
     async def fake_mpa_info(*args, **kwargs):
         assert mpa
@@ -4135,6 +4144,7 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     assert '"a2aStatus": "connecting"' in run_response.text.split("\n\n", 1)[0]
     assert "pong" in run_response.text
     assert "sandbox output" in run_response.text
+    assert decoder_modes == ([mpa] if streaming else [])
     if streaming is True:
         first_frame = run_response.text.split("\n\n")[1]
         assert '"a2aStatus": "submitted"' in first_frame

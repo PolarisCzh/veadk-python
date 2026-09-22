@@ -2,7 +2,7 @@
 
 [English](2026-09-21-mpa-test-types.md)
 
-- ID：mpa-test-types；创建/修订：2026-09-21；状态：approved。
+- ID：mpa-test-types；创建/修订：2026-09-21；状态：implemented。
 - 组件：[Studio MPA 创建](../../../specs/studio-mpa-creation/README.zh.md)。
 
 ## 背景与范围
@@ -34,3 +34,17 @@
 ## 验证
 
 2026-09-21 工作区差异：Pyright 基线 fail（20 处），TypeScript pass。最终检查 not_run（待执行）。浏览器/构建 not_applicable（无前端改动）；真实云 not_run（不相关）；pre-commit not_applicable（未请求提交）。
+
+
+## 最终审查与验证（2026-09-21）
+
+状态：implemented。T-1/T-2/T-3 和 AC-1/AC-2/AC-3 完成。生产差异仅为现有时长的 float 标注，默认值不变；替身修改保留行为/故障注入断言，使用真实 Profile 契约。未屏蔽检查，未放宽生产契约。
+
+- pass：上述完整范围 Pyright — 0 errors、0 warnings（基线 20 errors）。
+- pass：上述 MPA/CLI 回归命令 — 272 passed，一条上游 Starlette 弃用警告。
+- pass：`frontend/node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`（实际在 frontend 目录用等价相对路径执行），无前端修改。
+- pass：变更文件 Ruff 检查/格式、相对链接、双语审查、差异空白检查。
+- 迭代中签名对齐暴露一个无身份参数的替身锁调用，以及四个 mock engine 方言失败；已修正测试调用和显式方言绑定，最终 272 项通过，未遗留失败回归。
+- not_run：全仓回归，改动仅涉及隔离 MPA 测试和时长标注，完整受影响组件/CLI 测试已通过。浏览器/构建/真实云：not_applicable。pre-commit/提交：not_applicable，未请求提交。
+
+- pass：按仓库 Gitleaks 规则扫描全部 10 个变更代码/测试/设计文件，未发现密钥。

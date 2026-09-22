@@ -18,6 +18,7 @@ import type {
   MessageFeedbackState,
 } from "./adk/client";
 import { i18n } from "./i18n/runtime";
+import { addTokenUsage, EMPTY_SESSION_TOKEN_USAGE } from "./adk/tokenUsage";
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
 import type { ProjectFile } from "./create/project";
@@ -97,6 +98,7 @@ export type Block =
   | { kind: "activity-source"; label: string }
   | {
       kind: "thinking";
+      reasoningSegmentId?: string;
       text: string;
       done: boolean;
       thoughtKind?: "reasoning" | "thought";
@@ -160,6 +162,10 @@ export interface TurnMeta {
   localId?: string;
   streaming?: boolean;
   tokens?: number;
+  /** MPA A2A request usage deltas keyed by source/event identity. */
+  mpaUsage?: Record<string, number>;
+  /** Nonempty sandbox final, used only by the MPA A2A presentation view. */
+  mpaFinalAnswer?: string;
   ts?: number; // epoch seconds
   eventId?: string;
   invocationId?: string;
@@ -600,22 +606,23 @@ function closeThinking(blocks: Block[]) {
 }
 
 /** Apply one ADK event to a turn accumulator, returning a new accumulator. */
-export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
+export function applyEvent(acc: Acc, ev: AdkEvent, options: { mpaA2a?: boolean } = {}): Acc {
   const blocks = acc.blocks.map((b) => ({ ...b }));
   let liveStart = acc.liveStart;
   let pendingCodexProgress = acc.pendingCodexProgress.slice();
-  if (isMpaUsageEvent(ev)) {
+  if (isMpaUsageEvent(ev) && !options.mpaA2a) {
     return { blocks, liveStart, pendingCodexProgress };
   }
   if (isFinalAlreadyEmittedSandboxResponse(ev)) {
     // The Runtime has already streamed the sandbox answer and uses this
     // wrapper response only as the parent tool's completion signal. Preserve
-    // those live answer deltas while closing the parent activity card.
+    // those live answer deltas while closing the parent activity card. Keep
+    // the preview replaceable by a later persisted sandbox final event.
     completeSandboxTaskBlocks(blocks);
     closeThinking(blocks);
     return {
       blocks,
-      liveStart: blocks.length,
+      liveStart,
       pendingCodexProgress,
     };
   }
@@ -671,6 +678,16 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
     // Streaming delta: append into the live-preview region.
     for (const p of parts) {
       const text = visiblePartText(p);
+      const segmentId = options.mpaA2a && p.thought
+        ? metadataString(eventMetadata(ev), "reasoningSegmentId") : "";
+      if (segmentId && typeof text === "string" && text) {
+        const previous = blocks.find((block) =>
+          block.kind === "thinking" && block.reasoningSegmentId === segmentId);
+        if (previous?.kind === "thinking") previous.text += text;
+        else blocks.push({ kind: "thinking", text, done: false,
+          thoughtKind: thoughtKindOf(ev), reasoningSegmentId: segmentId });
+        continue;
+      }
       if (typeof text === "string" && text)
         appendText(
           blocks,
@@ -684,7 +701,14 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
 
   // Consolidated / final event: drop the live preview and append authoritative
   // content (merging consecutive same-kind text parts into one block).
+  // Sandbox finals contain the answer, not a snapshot of earlier reasoning.
+  // Keep that reasoning unless this event explicitly supplies its replacement.
+  const preservedThinking = options.mpaA2a && isMpaSandboxEvent(ev) &&
+    !parts.some((part) => part.thought && visiblePartText(part))
+    ? blocks.slice(liveStart).filter((block) => block.kind === "thinking")
+    : [];
   blocks.length = liveStart;
+  blocks.push(...preservedThinking);
   for (const p of parts) {
     const fc = fnCall(p);
     const fr = fnResp(p);
@@ -938,6 +962,58 @@ function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
   );
 }
 
+/** Reconcile an authoritative outer snapshot, never a sandbox/token delta. */
+function reconcileMpaA2aReasoningSnapshot(acc: Acc, ev: AdkEvent): Acc {
+  const metadata = eventMetadata(ev);
+  const parts = ev.content?.parts ?? [];
+  if (
+    ev.partial !== false ||
+    metadata.projectionSource !== "a2a-artifact" ||
+    isMpaSandboxEvent(ev) ||
+    !parts.length ||
+    ev.actions ||
+    !parts.every((part) => part.thought && typeof part.text === "string" &&
+      !fnCall(part) && !fnResp(part) && attachmentsFromParts([part]).length === 0)
+  ) return acc;
+  const previous = acc.blocks[acc.blocks.length - 1];
+  const snapshot = parts.map((part) => part.text).join("").trim();
+  if (
+    previous?.kind !== "thinking" ||
+    !previous.text.trim() ||
+    !snapshot.startsWith(previous.text.trim())
+  ) return acc;
+  // Re-open only this adjacent snapshot's preview range. Other activity is kept.
+  return { ...acc, liveStart: acc.blocks.length - 1 };
+}
+
+/** MPA A2A can split one user request into outer and sandbox assistant turns. */
+export function shouldShowEmptyAssistantResponse(
+  turns: Turn[],
+  index: number,
+  hasVisibleContent: (turn: Turn) => boolean,
+  options: {
+    mpaA2a: boolean;
+    turnIsStreaming: boolean;
+    requestIsStreaming: boolean;
+  },
+): boolean {
+  const turn = turns[index];
+  if (!turn || turn.role !== "assistant" || options.turnIsStreaming || hasVisibleContent(turn)) {
+    return false;
+  }
+  if (!options.mpaA2a) return true;
+  let start = index;
+  while (start > 0 && turns[start - 1].role !== "user") start -= 1;
+  let end = index + 1;
+  while (end < turns.length && turns[end].role !== "user") end += 1;
+  if (end === turns.length && options.requestIsStreaming) return false;
+  const fragments = turns.slice(start, end);
+  if (fragments.some(hasVisibleContent)) return false;
+  // Empty status placeholders are not rendered, so anchor the notice to the
+  // last renderable fragment rather than a trailing heartbeat-only turn.
+  return !turns.slice(index + 1, end).some((fragment) => fragment.blocks.length > 0);
+}
+
 function isUserEchoEvent(ev: AdkEvent): boolean {
   if (ev.author !== "user" && ev.content?.role !== "user") return false;
   return !(ev.content?.parts ?? []).some((part) => fnCall(part) || fnResp(part));
@@ -951,12 +1027,31 @@ function isUserEchoEvent(ev: AdkEvent): boolean {
 export function createAssistantEventProjector(
   localIdPrefix = "adk-stream",
   initialTurn?: Turn,
+  options: { mpaA2a?: boolean } = {},
 ) {
   let sequence = 0;
   const active = new Map<string, ActiveAssistantTurn>();
   const seenEventIds = new Set<string>();
   const eventIdOrder: string[] = [];
   let seededKey: string | undefined;
+  let latestMpaTurn: Turn | undefined;
+  let mpaUsage = { ...initialTurn?.meta?.mpaUsage };
+
+  const recordMpaUsage = (ev: AdkEvent): boolean => {
+    if (!options.mpaA2a || !(ev.usageMetadata ?? ev.usage_metadata)) return false;
+    const count = addTokenUsage(EMPTY_SESSION_TOKEN_USAGE, ev).current.totalTokenCount;
+    if (!count) return false;
+    const metadata = eventMetadata(ev);
+    const key = JSON.stringify([
+      metadata.source ?? "outer",
+      metadata.requestId ?? "",
+      ev.invocationId ?? ev.invocation_id ?? "",
+      ev.id || JSON.stringify(ev.usageMetadata ?? ev.usage_metadata),
+    ]);
+    if (Object.prototype.hasOwnProperty.call(mpaUsage, key)) return false;
+    mpaUsage = { ...mpaUsage, [key]: count };
+    return true;
+  };
 
   const keyFor = (author: string, invocationId: string) =>
     `${invocationId}\u0000${author}`;
@@ -991,7 +1086,23 @@ export function createAssistantEventProjector(
           ignored: true,
         };
       }
-      if (isMpaUsageEvent(ev)) {
+      const usageChanged = recordMpaUsage(ev);
+      // Usage is metadata, including deltas arriving after the final answer.
+      // Update the existing fragment; never manufacture a new empty reply.
+      if (
+        options.mpaA2a && !eventAffectsAssistantTurn(ev) &&
+        !ev.content?.parts?.length
+      ) {
+        if (usageChanged && latestMpaTurn) {
+          latestMpaTurn = {
+            ...latestMpaTurn,
+            meta: { ...latestMpaTurn.meta, mpaUsage },
+          };
+          return { turn: latestMpaTurn, completed: false };
+        }
+        return { turn: { role: "assistant", blocks: [] }, completed: false, ignored: true };
+      }
+      if (isMpaUsageEvent(ev) && !options.mpaA2a) {
         return {
           turn: { role: "assistant", blocks: [] },
           completed: false,
@@ -1066,7 +1177,11 @@ export function createAssistantEventProjector(
         };
       }
 
-      state.acc = applyEvent(state.acc, ev);
+      state.acc = applyEvent(
+        options.mpaA2a ? reconcileMpaA2aReasoningSnapshot(state.acc, ev) : state.acc,
+        ev,
+        options,
+      );
       const usage = ev.usageMetadata ?? ev.usage_metadata;
       const completed = completesAssistantResponse(ev, state.acc.blocks);
       state.meta = {
@@ -1076,6 +1191,13 @@ export function createAssistantEventProjector(
         streaming: !completed,
         a2aStatus: a2aStatusOf(ev),
         tokens: usage?.totalTokenCount || state.meta.tokens,
+        ...(options.mpaA2a ? {
+          mpaUsage,
+          mpaFinalAnswer: isMpaSandboxEvent(ev) && mpaEventType(ev) === "invocation.completed"
+            ? (ev.content?.parts ?? []).filter((part) => !part.thought)
+              .map((part) => visiblePartText(part) ?? "").join("").trim() || undefined
+            : state.meta.mpaFinalAnswer,
+        } : {}),
         ts: ev.timestamp || state.meta.ts,
         invocationId: invocationId || state.meta.invocationId,
         eventId: completed && ev.id ? ev.id : state.meta.eventId,
@@ -1096,6 +1218,7 @@ export function createAssistantEventProjector(
         // sandbox invocation.completed event immediately after the wrapper.
         active.set(key, state);
       }
+      if (options.mpaA2a) latestMpaTurn = turn;
       return { turn, completed };
     },
 
@@ -1105,7 +1228,11 @@ export function createAssistantEventProjector(
         blocks: state.acc.blocks.map((block) =>
           block.kind === "thinking" ? { ...block, done: true } : block
         ),
-        meta: { ...state.meta, streaming: false },
+        meta: {
+          ...state.meta,
+          streaming: false,
+          ...(options.mpaA2a ? { mpaUsage } : {}),
+        },
       }));
       active.clear();
       return turns;
@@ -1130,11 +1257,12 @@ export function upsertProjectedAssistantTurn(
 export function eventsToTurns(
   events: AdkEvent[],
   sessionState: Record<string, unknown> = {},
+  options: { mpaA2a?: boolean } = {},
 ): Turn[] {
   let turns: Turn[] = [];
   let historySegment = 0;
   const nextProjector = () =>
-    createAssistantEventProjector(`adk-history-${historySegment++}`);
+    createAssistantEventProjector(`adk-history-${historySegment++}`, undefined, options);
   let projector = nextProjector();
   for (const ev of events) {
     // Classify by author only: function-response events are authored by the

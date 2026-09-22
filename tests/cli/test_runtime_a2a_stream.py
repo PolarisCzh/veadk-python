@@ -21,6 +21,181 @@ def _frame(result):
     )
 
 
+def _mpa_artifact(event_type, payload, *, task_id="task-1", event_id=None):
+    return {
+        "kind": "artifact-update",
+        "taskId": task_id,
+        "lastChunk": False,
+        "artifact": {
+            "artifactId": "sandbox-artifact",
+            "parts": [
+                {
+                    "kind": "data",
+                    "metadata": {"schemaVersion": "mpa.sandbox-event.v1"},
+                    "data": {
+                        "eventId": event_id or event_type,
+                        "invocationId": "sandbox-invocation",
+                        "eventType": event_type,
+                        "payload": payload,
+                    },
+                }
+            ],
+        },
+    }
+
+
+def _outer_result(text="Final answer.", *, task_id="task-1"):
+    return {
+        "kind": "artifact-update",
+        "taskId": task_id,
+        "lastChunk": True,
+        "artifact": {
+            "artifactId": "outer-result",
+            "parts": [
+                {
+                    "kind": "data",
+                    "metadata": {"adk_type": "function_response"},
+                    "data": {"name": "sandbox_task", "response": {"result": text}},
+                }
+            ],
+        },
+    }
+
+
+def test_mpa_a2a_final_replaces_sandbox_preview_and_owns_outer_result():
+    decoder = A2AStreamDecoder()
+    delta = decoder.project(
+        _mpa_artifact("message.delta", {"text": "Final answer."}), author="default"
+    )
+    final = decoder.project(
+        _mpa_artifact("invocation.completed", {"finalMessage": "Final answer."}),
+        author="default",
+    )
+    assert len(final) == 1
+    assert final[0]["invocationId"] == delta[0]["invocationId"]
+    assert final[0]["partial"] is False
+    assert final[0]["turnComplete"] is True
+    assert final[0]["content"]["parts"] == [{"text": "Final answer."}]
+    assert decoder.project(_outer_result(), author="default") == []
+    extra = decoder.project(_outer_result("Outer reformulation."), author="default")
+    assert extra[0]["content"]["parts"] == [{"text": "Outer reformulation."}]
+    decoder.project(
+        {
+            "kind": "status-update",
+            "taskId": "task-1",
+            "final": True,
+            "status": {"state": "completed"},
+        },
+        author="default",
+    )
+    assert decoder.finalize_projection(author="default") == []
+
+
+def test_mpa_final_keeps_usage_tools_and_distinct_outer_reasoning():
+    decoder = A2AStreamDecoder()
+    decoder.project(
+        _mpa_artifact("invocation.completed", {"finalMessage": "Done."}),
+        author="default",
+    )
+    late_thought = {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "metadata": {"adk_usage_metadata": {"totalTokenCount": 12}},
+        "status": {
+            "state": "working",
+            "message": {
+                "role": "agent",
+                "messageId": "outer-thought",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "Outer reasoning.",
+                        "metadata": {"adk_thought": True},
+                    }
+                ],
+            },
+        },
+    }
+    projected = decoder.project(late_thought, author="default")
+    assert len(projected) == 2
+    assert projected[0]["content"]["parts"] == [
+        {"text": "Outer reasoning.", "thought": True}
+    ]
+    assert projected[1]["usageMetadata"]["totalTokenCount"] == 12
+    assert projected[1]["content"]["parts"] == []
+    for kind in ("tool.result", "tool.error"):
+        tool = decoder.project(
+            _mpa_artifact(kind, {"name": "exec_command", "commandId": "cmd-1"}),
+            author="default",
+        )
+        assert (
+            tool[0]["content"]["parts"][0]["functionResponse"]["name"] == "exec_command"
+        )
+
+
+def test_mpa_sandbox_replay_does_not_append_delta_or_final_again():
+    decoder = A2AStreamDecoder()
+    delta = _mpa_artifact("message.delta", {"text": "Final answer."})
+    final = _mpa_artifact("invocation.completed", {"finalMessage": "Final answer."})
+    assert decoder.project(delta, author="default")
+    assert decoder.project(delta, author="default") == []
+    assert decoder.project(final, author="default")
+    snapshot = {
+        "kind": "task",
+        "id": "task-1",
+        "status": {"state": "completed"},
+        "artifacts": [
+            delta["artifact"],
+            final["artifact"],
+            _outer_result()["artifact"],
+        ],
+    }
+    assert decoder.project(snapshot, author="default") == []
+    assert decoder.finalize_projection(author="default") == []
+    assert decoder.project(_outer_result(task_id="task-2"), author="default")
+    assert decoder.project(
+        _mpa_artifact("message.delta", {"text": "Other task."}, task_id="task-2"),
+        author="default",
+    )
+
+
+@pytest.mark.parametrize("field", ["text", "message"])
+def test_sandbox_completed_legacy_text_fields_remain_supported(field):
+    projected = A2AStreamDecoder().project(
+        _mpa_artifact("invocation.completed", {field: "Legacy final."}),
+        author="default",
+    )
+    assert projected[0]["content"]["parts"] == [{"text": "Legacy final."}]
+    assert projected[0]["turnComplete"] is True
+
+
+def test_missing_task_id_does_not_claim_an_unrelated_outer_answer():
+    decoder = A2AStreamDecoder()
+    final = _mpa_artifact("invocation.completed", {"finalMessage": "Done."})
+    final.pop("taskId")
+    assert decoder.project(final, author="default")
+    unrelated = _outer_result("Unscoped answer.")
+    unrelated.pop("taskId")
+    assert decoder.project(unrelated, author="default")
+
+
+@pytest.mark.parametrize(
+    "event_type,payload",
+    [
+        ("invocation.completed", {"finalMessage": ""}),
+        ("invocation.completed", {"finalMessage": "   "}),
+        ("invocation.failed", {"message": "Failed."}),
+        ("invocation.cancelled", {"message": "Cancelled."}),
+    ],
+)
+def test_empty_or_unsuccessful_sandbox_final_does_not_own_outer_result(
+    event_type, payload
+):
+    decoder = A2AStreamDecoder()
+    decoder.project(_mpa_artifact(event_type, payload), author="default")
+    assert decoder.project(_outer_result("Fallback response."), author="default")
+
+
 def test_decoder_handles_fragmented_and_multiple_sse_frames():
     decoder = A2AStreamDecoder()
     first = _frame({"kind": "status-update", "status": {"state": "working"}})
@@ -723,3 +898,167 @@ def test_other_errors_do_not_allow_fallback():
     assert (
         a2a_error_message({"error": {"code": -32603, "message": "failed"}}) == "failed"
     )
+
+
+@pytest.mark.parametrize(
+    "text", ["Result; additional warning.", "Different answer.", "Res"]
+)
+def test_mpa_final_preserves_distinct_outer_complete_text(text):
+    decoder = A2AStreamDecoder()
+    decoder.project(
+        _mpa_artifact("invocation.completed", {"finalMessage": "Result"}),
+        author="default",
+    )
+    projected = decoder.project(_outer_result(text), author="default")
+    assert projected[0]["content"]["parts"] == [{"text": text}]
+
+
+def test_mpa_final_preserves_partial_mirror_until_its_meaning_is_complete():
+    decoder = A2AStreamDecoder()
+    decoder.project(
+        _mpa_artifact("invocation.completed", {"finalMessage": "Result"}),
+        author="default",
+    )
+    for index, text in enumerate(["Result", "; additional warning."]):
+        event = {
+            "kind": "status-update",
+            "taskId": "task-1",
+            "status": {
+                "state": "working",
+                "message": {
+                    "role": "agent",
+                    "messageId": f"extra-{index}",
+                    "parts": [{"kind": "text", "text": text}],
+                },
+            },
+        }
+        projected = decoder.project(event, author="default")
+        assert projected[0]["content"]["parts"] == [{"text": text}]
+
+
+def test_mpa_exact_outer_mirror_keeps_other_artifact_parts():
+    decoder = A2AStreamDecoder()
+    decoder.project(
+        _mpa_artifact("invocation.completed", {"finalMessage": "Result"}),
+        author="default",
+    )
+    event = _outer_result(" Result ")
+    event["artifact"]["parts"].append({"kind": "text", "text": "Additional warning."})
+    projected = decoder.project(event, author="default")
+    assert [item["content"]["parts"] for item in projected] == [
+        [{"text": "Additional warning."}]
+    ]
+
+
+def _thought_status(parts, *, complete=False):
+    return {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "metadata": {"adk_usage_metadata": {"totalTokenCount": 1}} if complete else {},
+        "status": {
+            "state": "working",
+            "message": {
+                "role": "agent",
+                "parts": [
+                    {"kind": "text", "text": text, "metadata": {"adk_thought": True}}
+                    for text in parts
+                ],
+            },
+        },
+    }
+
+
+def _thought_text(events):
+    return "".join(
+        p["text"]
+        for e in events
+        for p in e.get("content", {}).get("parts", [])
+        if p.get("thought")
+    )
+
+
+def test_mpa_outer_multipart_snapshot_and_worker_replay_are_independent():
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    events = []
+    for part in ["Plan", " again", "."]:
+        events += decoder.project(_thought_status([part]), author="outer")
+    events += decoder.project(_thought_status(["Plan", " again", "."]), author="outer")
+    for index, part in enumerate(["Read ", "skill", ".", "Read skill."]):
+        events += decoder.project(
+            _mpa_artifact("thought.delta", {"text": part}, event_id=str(index)),
+            author="outer",
+        )
+    assert _thought_text(events) == "Plan again.Read skill."
+
+
+def test_mpa_reasoning_keeps_repeated_tokens_and_separates_phases_and_invocations():
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    first = decoder.project(
+        _mpa_artifact("thought.delta", {"text": "ha"}, event_id="1"), author="outer"
+    )
+    repeat = decoder.project(
+        _mpa_artifact("thought.delta", {"text": "ha"}, event_id="2"), author="outer"
+    )
+    assert _thought_text(first + repeat) == "haha"
+    decoder.project(_mpa_artifact("tool.call", {"name": "inspect"}), author="outer")
+    tail = decoder.project(
+        _mpa_artifact("thought.delta", {"text": "."}, event_id="3"), author="outer"
+    )
+    assert (
+        first[0]["customMetadata"]["reasoningSegmentId"]
+        == tail[0]["customMetadata"]["reasoningSegmentId"]
+    )
+    assert (
+        decoder.project(
+            _mpa_artifact("thought.delta", {"text": "haha."}, event_id="4"),
+            author="outer",
+        )
+        == []
+    )
+    decoder.project(_mpa_artifact("tool.result", {"name": "inspect"}), author="outer")
+    later = decoder.project(
+        _mpa_artifact("thought.delta", {"text": "haha."}, event_id="5"), author="outer"
+    )
+    assert _thought_text(later) == "haha."
+    assert (
+        later[0]["customMetadata"]["reasoningSegmentId"]
+        != first[0]["customMetadata"]["reasoningSegmentId"]
+    )
+    other = _mpa_artifact("thought.delta", {"text": "haha."}, event_id="6")
+    other["artifact"]["parts"][0]["data"]["invocationId"] = "other-worker"
+    assert _thought_text(decoder.project(other, author="outer")) == "haha."
+
+
+def test_mpa_cumulative_thought_extension_and_default_compatibility():
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    first = decoder.project(_thought_status(["Plan"]), author="outer")
+    more = decoder.project(
+        _thought_status(["Plan then act"], complete=True), author="outer"
+    )
+    assert _thought_text(first + more) == "Plan then act"
+    generic = A2AStreamDecoder()
+    assert (
+        "reasoningSegmentId"
+        not in generic.project(_thought_status(["Plan"]), author="outer")[0][
+            "customMetadata"
+        ]
+    )
+
+
+def test_mpa_mixed_status_parts_and_cancelled_partial_remain_visible():
+    event = _thought_status(["new thought"])
+    event["status"]["message"]["parts"].insert(0, {"text": "Answer", "metadata": None})
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    projected = decoder.project(event, author="outer")
+    assert _thought_text(projected) == "new thought"
+    assert projected[0]["content"]["parts"][0]["text"] == "Answer"
+    decoder.project(
+        {
+            "kind": "status-update",
+            "taskId": "task-1",
+            "final": True,
+            "status": {"state": "canceled"},
+        },
+        author="outer",
+    )
+    assert _thought_text(projected) == "new thought"
