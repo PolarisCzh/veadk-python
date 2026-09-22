@@ -13,8 +13,8 @@ from typing import Any
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -346,12 +346,6 @@ def _internal_error(error: str, stage: str) -> JSONResponse:
     )
 
 
-def _callback_redirect(code: str, state: str) -> RedirectResponse:
-    callback = f"{MPA_CALLBACK_PATH}?{urlencode({'code': code, 'state': state})}"
-    login = f"/oauth2/login?{urlencode({'redirect': callback})}"
-    return RedirectResponse(login, status_code=302, headers=_SECURITY_HEADERS)
-
-
 def _runtime_result_response(result: RuntimeCallbackResult) -> Response:
     code = result.payload["code"]
     if code == 0:
@@ -380,16 +374,15 @@ def _runtime_result_response(result: RuntimeCallbackResult) -> Response:
 def mount_mpa_identity_callback(
     app: FastAPI,
     *,
-    oauth2_handler: Any,
+    oauth2_handler: Any = None,
     hosted_callback_resolver: HostedCallbackResolver,
     runtime_credentials_resolver: RuntimeCredentialsResolver,
     http_client: httpx.AsyncClient | None = None,
 ) -> None:
-    """Mount the public browser callback while enforcing a Studio login session."""
+    """Mount the public browser callback for MPA Runtime authorization."""
 
     @app.get(MPA_CALLBACK_PATH)
     async def mpa_identity_callback(
-        request: Request,
         code: str | None = None,
         state: str | None = None,
         error: str | None = None,
@@ -399,10 +392,6 @@ def mount_mpa_identity_callback(
         relay_state = parse_identity_relay_state(state)
         if relay_state is None:
             return _invalid_request()
-
-        session, session_changed = await oauth2_handler.get_or_refresh_session(request)
-        if session is None:
-            return _callback_redirect(code, state)
 
         owned_client = http_client is None
         client = http_client or httpx.AsyncClient(
@@ -451,6 +440,4 @@ def mount_mpa_identity_callback(
             if owned_client:
                 await client.aclose()
 
-        if session_changed:
-            response.set_cookie(**oauth2_handler.create_session_cookie(session))
         return response

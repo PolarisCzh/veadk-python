@@ -1,8 +1,6 @@
 import base64
 import json
-from dataclasses import dataclass
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -150,35 +148,8 @@ def test_select_mpa_runtime_rejects_duplicate_match() -> None:
         )
 
 
-@dataclass
-class _Session:
-    access_token: str = "studio-access-token"
-
-
-_DEFAULT_SESSION = _Session()
-
-
-class _OAuthHandler:
-    def __init__(self, session: _Session | None, *, refreshed: bool = False) -> None:
-        self.session = session
-        self.refreshed = refreshed
-        self.config = SimpleNamespace(session_cookie_name="studio_session")
-
-    async def get_or_refresh_session(self, _request):
-        return self.session, self.refreshed
-
-    def create_session_cookie(self, _session):
-        return {
-            "key": "studio_session",
-            "value": "refreshed-session",
-            "httponly": True,
-        }
-
-
 def _app(
     *,
-    session: _Session | None = _DEFAULT_SESSION,
-    refreshed: bool = False,
     runtime_payload: dict[str, object] | None = None,
     runtime_status: int = 200,
     user_pool_location: str | None = (
@@ -225,7 +196,6 @@ def _app(
 
     mount_mpa_identity_callback(
         app,
-        oauth2_handler=_OAuthHandler(session, refreshed=refreshed),
         hosted_callback_resolver=hosted_callback,
         runtime_credentials_resolver=runtime_credentials,
         http_client=http_client,
@@ -233,29 +203,8 @@ def _app(
     return app, http_client, requests
 
 
-def test_callback_redirects_to_studio_login_and_preserves_callback() -> None:
-    app, _, requests = _app(session=None)
-    with TestClient(app, base_url="https://studio.example.com") as client:
-        response = client.get(
-            "/oauth/callback",
-            params={"code": "idp-code", "state": _relay_state()},
-            follow_redirects=False,
-        )
-
-    assert response.status_code == 302
-    login = urlsplit(response.headers["location"])
-    assert login.path == "/oauth2/login"
-    callback = parse_qs(login.query)["redirect"][0]
-    assert callback.startswith("/oauth/callback?")
-    assert parse_qs(urlsplit(callback).query) == {
-        "code": ["idp-code"],
-        "state": [_relay_state()],
-    }
-    assert requests == []
-
-
-def test_callback_relays_to_user_pool_and_runtime_server_side() -> None:
-    app, _, requests = _app(refreshed=True)
+def test_callback_relays_without_studio_session() -> None:
+    app, _, requests = _app()
 
     with TestClient(app, base_url="https://studio.example.com") as client:
         response = client.get(
@@ -266,7 +215,7 @@ def test_callback_relays_to_user_pool_and_runtime_server_side() -> None:
     assert response.status_code == 200
     assert "授权成功" in response.text
     assert response.headers["cache-control"] == "private, no-store, max-age=0"
-    assert "studio_session=refreshed-session" in response.headers["set-cookie"]
+    assert "set-cookie" not in response.headers
     assert len(requests) == 2
     assert dict(requests[0].url.params) == {
         "code": "idp-code",
@@ -347,7 +296,6 @@ def test_callback_rejects_runtime_redirect_without_leaking_credentials() -> None
 
     mount_mpa_identity_callback(
         app,
-        oauth2_handler=_OAuthHandler(_Session()),
         hosted_callback_resolver=callback_url,
         runtime_credentials_resolver=credentials,
         http_client=http_client,
