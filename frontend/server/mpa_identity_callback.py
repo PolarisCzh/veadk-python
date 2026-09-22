@@ -10,11 +10,11 @@ import re
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,6 @@ MPA_RUNTIME_CALLBACK_PATH = "/identity/oauth/callback"
 MAX_STATE_LENGTH = 16 * 1024
 MAX_CALLBACK_RESPONSE_BYTES = 64 * 1024
 CALLBACK_TIMEOUT_SECONDS = 10.0
-MAX_USER_POOL_REDIRECTS = 5
 
 _SECURITY_HEADERS = {
     "Cache-Control": "private, no-store, max-age=0",
@@ -123,22 +122,30 @@ def parse_identity_relay_state(value: str) -> IdentityRelayState | None:
     ):
         return None
 
-    inner = _decode_base64url_json(request_state.strip())
-    if inner is None:
+    target = parse_mpa_runtime_state(request_state)
+    if target is None:
         return None
-    target = inner.get("target")
+    return IdentityRelayState(
+        request_id=request_id.strip(),
+        provider_id=provider_id.strip(),
+        request_state=request_state.strip(),
+        target=target,
+    )
+
+
+def parse_mpa_runtime_state(value: str) -> MpaCallbackTarget | None:
+    """Decode the UserPool-issued callback state and its strict MPA target."""
+    payload = _decode_base64url_json(value.strip())
+    if payload is None:
+        return None
+    target = payload.get("target")
     if (
         not isinstance(target, str)
         or not target.startswith("mi-")
         or len(target) <= len("mi-")
     ):
         return None
-    return IdentityRelayState(
-        request_id=request_id.strip(),
-        provider_id=provider_id.strip(),
-        request_state=request_state.strip(),
-        target=MpaCallbackTarget(target.strip()),
-    )
+    return MpaCallbackTarget(target.strip())
 
 
 def _normalize_https_origin(value: str) -> str:
@@ -211,53 +218,17 @@ def _validate_hosted_callback_url(value: str) -> str:
     return f"{origin}{parsed.path}"
 
 
-def _parse_code_state_from_url(value: str, base_url: str) -> tuple[str, str] | None:
-    try:
-        parsed = urlsplit(urljoin(base_url, value))
-    except ValueError:
-        return None
-    query = httpx.QueryParams(parsed.query)
-    code = (query.get("code") or "").strip()
-    state = (query.get("state") or "").strip()
-    return (code, state) if code and state else None
-
-
-async def _relay_user_pool_callback(
-    client: httpx.AsyncClient,
+def _user_pool_redirect_response(
     hosted_callback_url: str,
     code: str,
     state: str,
-) -> tuple[str, str]:
+) -> RedirectResponse:
     callback_url = _validate_hosted_callback_url(hosted_callback_url)
-    callback_origin = _normalize_https_origin(callback_url)
-    next_url = f"{callback_url}?{urlencode({'code': code, 'state': state})}"
-    for redirect_count in range(MAX_USER_POOL_REDIRECTS + 1):
-        response = await client.get(next_url, follow_redirects=False)
-        location = response.headers.get("location")
-        redirect_url = urljoin(str(response.url), location) if location else ""
-        relayed = (
-            _parse_code_state_from_url(redirect_url, str(response.url))
-            if redirect_url
-            else None
-        )
-        if relayed is not None:
-            return relayed
-        if not location or not 300 <= response.status_code < 400:
-            break
-        if redirect_count == MAX_USER_POOL_REDIRECTS:
-            raise MpaIdentityCallbackError("UserPool relay exceeded redirect limit")
-        try:
-            redirect_origin = _normalize_https_origin(redirect_url)
-        except ValueError:
-            raise MpaIdentityCallbackError(
-                "UserPool relay redirected to an invalid endpoint"
-            ) from None
-        if redirect_origin != callback_origin:
-            raise MpaIdentityCallbackError(
-                "UserPool relay redirected to an untrusted endpoint"
-            )
-        next_url = redirect_url
-    raise MpaIdentityCallbackError("UserPool relay did not return code and state")
+    return RedirectResponse(
+        f"{callback_url}?{urlencode({'code': code, 'state': state})}",
+        status_code=302,
+        headers=_SECURITY_HEADERS,
+    )
 
 
 def _parse_runtime_payload(response: httpx.Response) -> dict[str, Any]:
@@ -390,7 +361,32 @@ def mount_mpa_identity_callback(
         if error or not code or not state:
             return _invalid_request()
         relay_state = parse_identity_relay_state(state)
-        if relay_state is None:
+        if relay_state is not None:
+            stage = "resolve_userpool_callback"
+            try:
+                hosted_callback_url = await hosted_callback_resolver(
+                    relay_state.provider_id
+                )
+                return _user_pool_redirect_response(hosted_callback_url, code, state)
+            except Exception as callback_error:  # noqa: BLE001 - sanitize route boundary
+                safe_error = (
+                    str(callback_error)
+                    if isinstance(callback_error, MpaIdentityCallbackError)
+                    else type(callback_error).__name__
+                )
+                logger.warning(
+                    "MPA identity callback failed stage=%s error=%s "
+                    "error_type=%s request_id=%s target=%s",
+                    stage,
+                    safe_error,
+                    type(callback_error).__name__,
+                    relay_state.request_id,
+                    relay_state.target.instance_id,
+                )
+                return _internal_error(safe_error, stage)
+
+        target = parse_mpa_runtime_state(state)
+        if target is None:
             return _invalid_request()
 
         owned_client = http_client is None
@@ -398,26 +394,15 @@ def mount_mpa_identity_callback(
             timeout=httpx.Timeout(CALLBACK_TIMEOUT_SECONDS),
             follow_redirects=False,
         )
-        stage = "resolve_userpool_callback"
+        stage = "resolve_runtime"
         try:
-            hosted_callback_url = await hosted_callback_resolver(
-                relay_state.provider_id
-            )
-            stage = "relay_userpool_callback"
-            relayed_code, relayed_state = await _relay_user_pool_callback(
-                client,
-                hosted_callback_url,
-                code,
-                state,
-            )
-            stage = "resolve_runtime"
-            credentials = await runtime_credentials_resolver(relay_state.target)
+            credentials = await runtime_credentials_resolver(target)
             stage = "runtime_callback"
             result = await _call_runtime_callback(
                 client,
                 credentials,
-                relayed_code,
-                relayed_state,
+                code,
+                state,
             )
             response = _runtime_result_response(result)
         except Exception as callback_error:  # noqa: BLE001 - sanitize route boundary
@@ -428,12 +413,11 @@ def mount_mpa_identity_callback(
             )
             logger.warning(
                 "MPA identity callback failed stage=%s error=%s "
-                "error_type=%s request_id=%s target=%s",
+                "error_type=%s target=%s",
                 stage,
                 safe_error,
                 type(callback_error).__name__,
-                relay_state.request_id,
-                relay_state.target.instance_id,
+                target.instance_id,
             )
             response = _internal_error(safe_error, stage)
         finally:

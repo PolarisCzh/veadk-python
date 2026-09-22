@@ -14,11 +14,11 @@ from frontend.server.mpa_identity_callback import (
     RuntimeCallbackResult,
     _call_runtime_callback,
     _parse_runtime_payload,
-    _relay_user_pool_callback,
     _runtime_result_response,
     build_user_pool_hosted_callback_url,
     mount_mpa_identity_callback,
     parse_identity_relay_state,
+    parse_mpa_runtime_state,
     select_mpa_runtime,
 )
 
@@ -40,6 +40,10 @@ def _relay_state(*, target: str = "mi-agent1", **target_metadata: object) -> str
             ),
         }
     )
+
+
+def _runtime_state(*, target: str = "mi-agent1") -> str:
+    return _state({"target": target, "type": "esa", "nonce": "nonce-1"})
 
 
 @pytest.mark.parametrize("target_metadata", [{}, {"is_debug": "ignored"}])
@@ -78,6 +82,15 @@ def test_parse_identity_relay_state_accepts_mpa_target(
 )
 def test_parse_identity_relay_state_rejects_invalid_payloads(state: str) -> None:
     assert parse_identity_relay_state(state) is None
+
+
+def test_parse_mpa_runtime_state_accepts_mpa_target() -> None:
+    assert parse_mpa_runtime_state(_runtime_state()) == MpaCallbackTarget("mi-agent1")
+
+
+@pytest.mark.parametrize("state", ["", "not-base64", _state({"target": "ci-claw1"})])
+def test_parse_mpa_runtime_state_rejects_invalid_payloads(state: str) -> None:
+    assert parse_mpa_runtime_state(state) is None
 
 
 @pytest.mark.parametrize(
@@ -152,10 +165,6 @@ def _app(
     *,
     runtime_payload: dict[str, object] | None = None,
     runtime_status: int = 200,
-    user_pool_location: str | None = (
-        "https://studio.example.com/oauth/callback"
-        "?code=user-pool-code&state=user-pool-state"
-    ),
     hosted_callback_error: Exception | None = None,
     runtime_credentials_error: Exception | None = None,
 ):
@@ -163,11 +172,6 @@ def _app(
 
     def upstream(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.url.host == "pool.example.com":
-            assert request.url.path == "/login/generic_oauth/callback"
-            if user_pool_location is None:
-                return httpx.Response(200)
-            return httpx.Response(302, headers={"location": user_pool_location})
         return httpx.Response(
             runtime_status,
             json=runtime_payload or {"code": 0, "message": "authorized", "error": ""},
@@ -203,31 +207,38 @@ def _app(
     return app, http_client, requests
 
 
-def test_callback_relays_without_studio_session() -> None:
+def test_callback_redirects_browser_through_user_pool_then_calls_runtime() -> None:
     app, _, requests = _app()
 
     with TestClient(app, base_url="https://studio.example.com") as client:
-        response = client.get(
+        relay_response = client.get(
             "/oauth/callback",
             params={"code": "idp-code", "state": _relay_state()},
+            follow_redirects=False,
+        )
+        response = client.get(
+            "/oauth/callback",
+            params={"code": "user-pool-code", "state": _runtime_state()},
         )
 
+    assert relay_response.status_code == 302
+    assert relay_response.headers["location"] == (
+        "https://pool.example.com/login/generic_oauth/callback"
+        f"?code=idp-code&state={_relay_state()}"
+    )
+    assert relay_response.headers["cache-control"] == "private, no-store, max-age=0"
     assert response.status_code == 200
     assert "授权成功" in response.text
     assert response.headers["cache-control"] == "private, no-store, max-age=0"
     assert "set-cookie" not in response.headers
-    assert len(requests) == 2
+    assert len(requests) == 1
+    assert requests[0].url.path == "/identity/oauth/callback"
     assert dict(requests[0].url.params) == {
-        "code": "idp-code",
-        "state": _relay_state(),
-    }
-    assert requests[1].url.path == "/identity/oauth/callback"
-    assert dict(requests[1].url.params) == {
         "code": "user-pool-code",
-        "state": "user-pool-state",
+        "state": _runtime_state(),
     }
-    assert requests[1].headers["authorization"] == "Bearer runtime-api-key"
-    assert "x-jwt-token" not in requests[1].headers
+    assert requests[0].headers["authorization"] == "Bearer runtime-api-key"
+    assert "x-jwt-token" not in requests[0].headers
 
 
 def test_callback_preserves_runtime_expired_result() -> None:
@@ -243,7 +254,7 @@ def test_callback_preserves_runtime_expired_result() -> None:
     with TestClient(app, base_url="https://studio.example.com") as client:
         response = client.get(
             "/oauth/callback",
-            params={"code": "idp-code", "state": _relay_state()},
+            params={"code": "user-pool-code", "state": _runtime_state()},
         )
 
     assert response.status_code == 400
@@ -304,7 +315,7 @@ def test_callback_rejects_runtime_redirect_without_leaking_credentials() -> None
     with TestClient(app, base_url="https://studio.example.com") as client:
         response = client.get(
             "/oauth/callback",
-            params={"code": "idp-code", "state": _relay_state()},
+            params={"code": "user-pool-code", "state": _runtime_state()},
         )
 
     assert response.status_code == 502
@@ -313,25 +324,6 @@ def test_callback_rejects_runtime_redirect_without_leaking_credentials() -> None
         "message": "",
         "error": "Runtime callback redirected unexpectedly",
         "stage": "runtime_callback",
-    }
-    assert len(requests) == 2
-
-
-def test_callback_exposes_user_pool_relay_failure_stage() -> None:
-    app, _, requests = _app(user_pool_location=None)
-
-    with TestClient(app, base_url="https://studio.example.com") as client:
-        response = client.get(
-            "/oauth/callback",
-            params={"code": "idp-code", "state": _relay_state()},
-        )
-
-    assert response.status_code == 502
-    assert response.json() == {
-        "code": 5000,
-        "message": "",
-        "error": "UserPool relay did not return code and state",
-        "stage": "relay_userpool_callback",
     }
     assert len(requests) == 1
 
@@ -344,7 +336,7 @@ def test_callback_exposes_runtime_resolution_failure_stage() -> None:
     with TestClient(app, base_url="https://studio.example.com") as client:
         response = client.get(
             "/oauth/callback",
-            params={"code": "idp-code", "state": _relay_state()},
+            params={"code": "user-pool-code", "state": _runtime_state()},
         )
 
     assert response.status_code == 502
@@ -354,7 +346,7 @@ def test_callback_exposes_runtime_resolution_failure_stage() -> None:
         "error": "MPA Runtime not found",
         "stage": "resolve_runtime",
     }
-    assert len(requests) == 1
+    assert requests == []
 
 
 def test_callback_sanitizes_unexpected_error_and_logs_stage(caplog) -> None:
@@ -379,111 +371,6 @@ def test_callback_sanitizes_unexpected_error_and_logs_stage(caplog) -> None:
     assert "request_id=request-1 target=mi-agent1" in caplog.text
     assert "must-not-leak-idp-code" not in caplog.text
     assert requests == []
-
-
-@pytest.mark.asyncio
-async def test_user_pool_relay_requires_redirect_code_and_state() -> None:
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda _: httpx.Response(200))
-    )
-    try:
-        with pytest.raises(MpaIdentityCallbackError, match="did not return"):
-            await _relay_user_pool_callback(
-                client,
-                "https://pool.example.com/login/generic_oauth/callback",
-                "idp-code",
-                _relay_state(),
-            )
-    finally:
-        await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_user_pool_relay_follows_same_origin_intermediate_redirects() -> None:
-    requests: list[httpx.Request] = []
-
-    def upstream(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path == "/login/generic_oauth/callback":
-            return httpx.Response(
-                302,
-                headers={
-                    "location": "/login/continue?request=request-1",
-                    "set-cookie": "relay=session; Path=/; Secure; HttpOnly",
-                },
-            )
-        assert request.url.path == "/login/continue"
-        assert request.headers["cookie"] == "relay=session"
-        return httpx.Response(
-            302,
-            headers={
-                "location": (
-                    "https://studio.example.com/oauth/callback"
-                    "?code=user-pool-code&state=user-pool-state"
-                )
-            },
-        )
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
-    try:
-        assert await _relay_user_pool_callback(
-            client,
-            "https://pool.example.com/login/generic_oauth/callback",
-            "idp-code",
-            _relay_state(),
-        ) == ("user-pool-code", "user-pool-state")
-    finally:
-        await client.aclose()
-
-    assert len(requests) == 2
-
-
-@pytest.mark.parametrize(
-    ("location", "error"),
-    [
-        ("https://evil.example.com/login/continue", "untrusted endpoint"),
-        ("http://pool.example.com/login/continue", "invalid endpoint"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_user_pool_relay_rejects_unsafe_intermediate_redirects(
-    location: str,
-    error: str,
-) -> None:
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda _: httpx.Response(302, headers={"location": location})
-        )
-    ) as client:
-        with pytest.raises(MpaIdentityCallbackError, match=error):
-            await _relay_user_pool_callback(
-                client,
-                "https://pool.example.com/login/generic_oauth/callback",
-                "idp-code",
-                _relay_state(),
-            )
-
-
-@pytest.mark.asyncio
-async def test_user_pool_relay_limits_intermediate_redirects() -> None:
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda _: httpx.Response(
-                302,
-                headers={"location": "/login/continue"},
-            )
-        )
-    )
-    try:
-        with pytest.raises(MpaIdentityCallbackError, match="redirect limit"):
-            await _relay_user_pool_callback(
-                client,
-                "https://pool.example.com/login/generic_oauth/callback",
-                "idp-code",
-                _relay_state(),
-            )
-    finally:
-        await client.aclose()
 
 
 @pytest.mark.parametrize(

@@ -1078,10 +1078,10 @@ SSO and `/oauth/callback` for MPA user authorization on that same client. An MPA
 Runtime can therefore reuse the deployed Studio user pool and client and set its
 identity callback URL to `https://<studio-domain>/oauth/callback`. The callback
 validates the MPA relay state without requiring a Studio browser session,
-relays the external IdP result through the configured UserPool, locates exactly
-one key-auth Runtime by `MPA_AGENT_ID`, and calls its
-`/identity/oauth/callback` endpoint from the server. The browser never receives
-the Runtime endpoint or API key.
+redirects the browser through the configured UserPool, then locates exactly one
+key-auth Runtime by `MPA_AGENT_ID` and calls its `/identity/oauth/callback`
+endpoint from the server. The browser never receives the Runtime endpoint or
+API key.
 
 After automatic provisioning, the success summary lists every Sandbox type and
 Tool ID, the private Studio TOS address, and the resolved Identity user pool and
