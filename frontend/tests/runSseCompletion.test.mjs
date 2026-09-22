@@ -59,7 +59,7 @@ test("MPA session refresh keeps history listing lightweight and reconciles the a
   );
   assert.match(
     appSource,
-    /async function refreshSessionTranscript\([\s\S]*?expectedEventId: string,[\s\S]*?\): Promise<void> \{[\s\S]*?const session = await getSession\(app, userId, sid\);[\s\S]*?eventsToTurns\(session\.events \?\? \[\], session\.state\)/,
+    /async function refreshSessionTranscript\([\s\S]*?expectedEventId: string,[\s\S]*?\): Promise<void> \{[\s\S]*?const session = await getSession\(app, userId, sid\);[\s\S]*?eventsToTurns\(session\.events \?\? \[\], session\.state, \{\s*mpaA2a: isMpaA2aRuntimeApp\(app\)/,
   );
   assert.match(
     appSource,

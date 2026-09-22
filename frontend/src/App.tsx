@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEventHandler,
@@ -41,6 +42,7 @@ import {
   getRuntimeStudioToolCapabilities,
   getRuntimes,
   isMpaRuntimeApp,
+  isMpaA2aRuntimeApp,
   listApps,
   listEnvironments,
   listWorkspaces,
@@ -101,6 +103,7 @@ import {
   createAssistantEventProjector,
   eventsToTurns,
   sessionTitle,
+  shouldShowEmptyAssistantResponse,
   upsertProjectedAssistantTurn,
   type Block,
   type IntelligentDevelopmentReleaseRef,
@@ -109,7 +112,7 @@ import {
 } from "./blocks";
 import { reconcilePersistedTranscript } from "./transcriptReconcile";
 import { i18n } from "./i18n";
-import { buildTranscriptRows } from "./transcriptRows";
+import { buildTranscriptRows, groupMpaTranscriptTurns } from "./transcriptRows";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
 import { MpaAgentInfoRail } from "./ui/mpa-agent-info/MpaAgentInfoRail";
 import type { SkillCenterWorkspaceLaunch } from "./ui/SkillCenter";
@@ -2812,6 +2815,11 @@ export default function App() {
   const responseAnnotationContextsRef = useRef<
     Map<number, ResponseAnnotationContext>
   >(new Map());
+  const transcriptTurns = useMemo(() => groupMpaTranscriptTurns(
+    turns,
+    isMpaA2aRuntimeApp(appName),
+    activeConversationBusy || presentingStream,
+  ), [turns, appName, connections, activeConversationBusy, presentingStream]);
   const responseAnnotationRuntimeAvailable = connections.some(
     (connection) =>
       Boolean(connection.runtimeId && connection.region) &&
@@ -2819,7 +2827,7 @@ export default function App() {
   );
   useLayoutEffect(() => {
     const contexts = new Map<number, ResponseAnnotationContext>();
-    turns.forEach((turn, index) => {
+    transcriptTurns.forEach((turn, index) => {
       const feedbackEventId = turn.meta?.eventId ?? "";
       const canRate = Boolean(
         responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
@@ -2827,7 +2835,7 @@ export default function App() {
       const turnIsStreaming = assistantTurnIsStreaming(
         turn,
         index,
-        turns.length,
+        transcriptTurns.length,
         activeConversationBusy,
         presentingStream,
       );
@@ -2839,7 +2847,7 @@ export default function App() {
           !turnAwaitingAuth(turn)
         ),
         turn,
-        input: canRate ? previousUserTurnText(turns, index) : "",
+        input: canRate ? previousUserTurnText(transcriptTurns, index) : "",
       });
     });
     responseAnnotationContextsRef.current = contexts;
@@ -2848,7 +2856,7 @@ export default function App() {
     cloudProvider,
     presentingStream,
     responseAnnotationRuntimeAvailable,
-    turns,
+    transcriptTurns,
   ]);
   const openResponseAnnotation = useCallback(() => {
     const selection = window.getSelection();
@@ -3824,7 +3832,9 @@ export default function App() {
   ): Promise<void> {
     try {
       const session = await getSession(app, userId, sid);
-      const nextTurns = eventsToTurns(session.events ?? [], session.state);
+      const nextTurns = eventsToTurns(session.events ?? [], session.state, {
+        mpaA2a: isMpaA2aRuntimeApp(app),
+      });
       setTurnsBySession((current) => {
         const existing = current[sid] ?? [];
         const reconciled = reconcilePersistedTranscript(
@@ -5095,7 +5105,9 @@ export default function App() {
     setLoadingSession(true);
     try {
       const s = await getSession(appName, userId, id);
-      setTurnsFor(id, eventsToTurns(s.events ?? [], s.state));
+      setTurnsFor(id, eventsToTurns(s.events ?? [], s.state, {
+        mpaA2a: isMpaA2aRuntimeApp(appName),
+      }));
       setTokenUsageBySession((current) => ({
         ...current,
         [sessionUsageKey(appName, id)]: aggregateTokenUsage(s.events ?? []),
@@ -5326,6 +5338,8 @@ export default function App() {
     viewSidRef.current = sid;
     const eventProjector = createAssistantEventProjector(
       `${sid}-continue-${crypto.randomUUID()}`,
+      undefined,
+      { mpaA2a: isMpaA2aRuntimeApp(appName) },
     );
     let streamFailed = false;
     try {
@@ -5632,6 +5646,7 @@ export default function App() {
     const eventProjector = createAssistantEventProjector(
       `${sid}-${crypto.randomUUID()}`,
       optimisticAssistantTurn,
+      { mpaA2a: isMpaA2aRuntimeApp(appName) },
     );
     let streamFailed = false;
     let streamError: unknown = null;
@@ -5819,6 +5834,7 @@ export default function App() {
       lastTurn?.role === "assistant"
         ? { ...lastTurn, blocks: base }
         : undefined,
+      { mpaA2a: isMpaA2aRuntimeApp(appName) },
     );
     try {
       let finalEventId = "";
@@ -6281,10 +6297,9 @@ export default function App() {
     sid: string,
     signal?: AbortSignal,
   ): Promise<{ idempotencyKey: string; executionConfigVersion: number } | null> {
-    const isMpaAgentRuntime = currentConn?.agentCategory === "mpa";
     if (
-      !isMpaAgentRuntime ||
-      !currentConn.runtimeId ||
+      !isMpaRuntimeApp(appName) ||
+      !currentConn?.runtimeId ||
       !currentRuntimeAppName
     ) {
       return null;
@@ -8267,10 +8282,10 @@ export default function App() {
                   onWheel={onConversationWheel}
                   onTouchMove={onConversationTouchMove}
                 >
-                  {buildTranscriptRows(turns, rootCapabilityNode).map((row) => {
+                  {buildTranscriptRows(transcriptTurns, rootCapabilityNode).map((row) => {
             const renderTurn = (i: number) => {
-            const turn = turns[i];
-            const isLast = i === turns.length - 1;
+            const turn = transcriptTurns[i];
+            const isLast = i === transcriptTurns.length - 1;
             if (turn.role === "system") {
               return turn.activity ? (
                 <div
@@ -8342,14 +8357,14 @@ export default function App() {
             const turnIsStreaming = assistantTurnIsStreaming(
               turn,
               i,
-              turns.length,
+              transcriptTurns.length,
               activeConversationBusy,
               presentingStream,
             );
             const canRate = Boolean(
               currentRuntime && feedbackEventId && turnText(turn),
             );
-            const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
+            const feedbackInput = canRate ? previousUserTurnText(transcriptTurns, i) : "";
             const canAnnotate = Boolean(
               canRate &&
               cloudProvider !== "byteplus" &&
@@ -8429,9 +8444,12 @@ export default function App() {
                         }}
                       />
                     </SandboxFileContext.Provider>
-                    {/* Finalized turn that produced no visible answer (e.g. only
-                        thinking + an empty A2UI surface) — show a fallback note. */}
-                    {!turnIsStreaming && !turnHasVisibleContent(turn) && (
+                    {/* MPA A2A fragments share one request-level empty notice. */}
+                    {shouldShowEmptyAssistantResponse(transcriptTurns, i, turnHasVisibleContent, {
+                      mpaA2a: isMpaA2aRuntimeApp(appName),
+                      turnIsStreaming,
+                      requestIsStreaming: activeConversationBusy || presentingStream,
+                    }) && (
                       <div className="turn-empty">{t("conversation.emptyResponse")}</div>
                     )}
                     {/* Hide the actions/timestamp row while this turn is still
@@ -8506,7 +8524,7 @@ export default function App() {
                                 title={t("feedback.reportIssue")}
                                 onClick={() => setIssueFeedbackTarget({
                                   turn,
-                                  input: previousUserTurnText(turns, i),
+                                  input: previousUserTurnText(transcriptTurns, i),
                                 })}
                               >
                                 <IssueFeedbackIcon className="icon" />

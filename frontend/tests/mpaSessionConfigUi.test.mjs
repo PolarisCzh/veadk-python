@@ -100,5 +100,5 @@ test("MPA chat sends the accepted execution config revision to runSSE", () => {
   assert.match(appSource, /executionConfigVersion: mpaRunConfig\?\.executionConfigVersion/);
   assert.match(appSource, /lastEventId: lastCompletedEventId\(turnsBySession\[sid\]\)/);
   assert.match(appSource, /getMpaSessionExecutionConfig\(\{[\s\S]*?runtimeId: currentConn\.runtimeId/);
-  assert.match(appSource, /agentCategory === "mpa"[\s\S]*?config\.revision/);
+  assert.match(appSource, /!isMpaRuntimeApp\(appName\)[\s\S]*?config\.revision/);
 });

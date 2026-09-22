@@ -350,6 +350,62 @@ for (const invocationIds of [true, false]) {
   });
 }
 
+for (const withThought of [false, true]) {
+  for (const finalText of ["Fixture answer.", "Corrected final answer."]) {
+    test(`MPA wrapper preserves replaceable preview (thought=${withThought}, final=${finalText})`, () => {
+      const invocationId = "mpa-preview-invocation";
+      const sandbox = (type, text, partial = false, thought = false) => ({
+        ...event("Agent", text, { invocationId, id: type, partial, thought }),
+        customMetadata: { source: "sandbox", eventType: type },
+      });
+      const call = {
+        id: "mpa-call",
+        author: "default",
+        invocationId,
+        content: { parts: [{ functionCall: { id: "call", name: "sandbox_task", args: {} } }] },
+      };
+      const wrapper = {
+        id: "mpa-wrapper",
+        author: "default",
+        invocationId,
+        content: { parts: [{ functionResponse: {
+          id: "call",
+          name: "sandbox_task",
+          response: { finalAlreadyEmitted: true, status: "completed" },
+        } }] },
+      };
+      const final = sandbox("invocation.completed", finalText);
+      const events = [
+        call,
+        sandbox("message.delta", "Fixture answer.", true),
+        wrapper,
+        ...(withThought ? [sandbox("thought.completed", "Fixture reasoning.", false, true)] : []),
+        final,
+      ];
+      const projector = createAssistantEventProjector("mpa-preview");
+      let live = [];
+      for (const item of events) {
+        const projected = projector.project(item);
+        if (!projected.ignored) live = upsertProjectedAssistantTurn(live, projected.turn);
+        if (item === wrapper) {
+          assert.equal(blockText(live[0], "text"), "Fixture answer.");
+          assert.equal(live[0].meta.streaming, false);
+        }
+      }
+      for (const turn of projector.finish()) live = upsertProjectedAssistantTurn(live, turn);
+      const replay = eventsToTurns(events);
+      const durableHistory = eventsToTurns(events.filter((item) => !item.partial));
+      for (const turns of [live, replay, durableHistory]) {
+        assert.equal(turns.length, 1);
+        assert.equal(blockText(turns[0], "text"), finalText);
+        assert.equal(blockText(turns[0], "thinking"), withThought ? "Fixture reasoning." : "");
+        assert.equal(turns[0].blocks.find((block) => block.kind === "tool")?.status, "completed");
+        assert.equal(turns[0].meta.streaming, false);
+      }
+    });
+  }
+}
+
 test("closes the live sandbox task from its finalAlreadyEmitted wrapper response", () => {
   const projector = createAssistantEventProjector("mpa-live");
   let turns = [];
@@ -434,4 +490,3 @@ test("closes the live sandbox task from its finalAlreadyEmitted wrapper response
   assert.equal(transportFinished.meta.localId, turns[0].meta.localId);
   assert.equal(transportFinished.meta.streaming, false);
 });
-

@@ -2,9 +2,9 @@
 
 - **组件 ID：** `studio-tool-activity`
 - **状态：** active
-- **修订日期：** 2026-09-12
+- **修订日期：** 2026-09-22
 - **英文版本：** [README.md](README.md)
-- **关联 PRD：** [Studio 工具活动可视化设计](../../prd-spec/features/studio-tool-activity-visualization/2026-09-12-studio-tool-activity-visualization-design.zh.md)
+- **关联 PRD：** [Studio 工具活动可视化设计](../../prd-spec/features/studio-tool-activity-visualization/2026-09-12-studio-tool-activity-visualization-design.zh.md)和 [保留补充内容](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-preserve-followup-content.zh.md)
 - **负责实现：** `frontend/src/blocks.ts`、`frontend/src/ui/Blocks.tsx` 和 `frontend/src/ui/tool-activity/`
 - **主要测试：** `frontend/tests/toolActivityModel.test.mjs`、`frontend/tests/toolBlockDefaultOpen.test.mjs` 和 `frontend/tests/codexSandboxProgress.test.mjs`
 
@@ -49,6 +49,7 @@
 
 当 `delegate_to_codex_sandbox` 存在结构化子活动时，子 block 在当前 transcript 层级展示，并使用一个轻量 `Codex Sandbox` 来源标记。没有子活动时保留外层工具卡。最终回答保持在工具活动序列之外。
 
+
 ### `CON-6` — 安全探索聚合
 
 只有同来源、相邻、已完成且成功的 `read` 和 `search` 活动可形成探索分组。命令、文件变更、MCP、授权、失败、运行中活动、来源变化、非工具 block 和最终文本都会终止分组。子项保持原顺序并可分别查看。
@@ -67,6 +68,10 @@
 
 若 A2A 虚拟 session 只持久化最终文本，则无法恢复临时工具过程；Studio 必须保留最终回答且禁止伪造缺失历史。这是传输持久化限制，不代表允许重新提交任务。
 
+携带 `finalAlreadyEmitted: true` 的 MPA `sandbox_task` 响应关闭父活动，但不推进实时预览边界。后到的 sandbox 合并最终事件替换预览；仅传输结束时保留预览。这一规则独立于 `delegate_to_codex_sandbox` 活动格式。
+
+MPA 通过 A2A 接入时，由后端按 [Runtime 诊断 CON-8](../studio-runtime-diagnostics/README.zh.md) 投影 sandbox final 并抑制后续外层答案副本。上述原生会话包装规则不负责 A2A 规范化。
+
 ### `CON-10` — 无障碍与响应式
 
 交互式折叠使用原生 button、`aria-expanded`、清晰焦点、文字状态和至少 44px 有效点击区。折叠内容必须 `aria-hidden` 且 inert。窄屏优先隐藏次要摘要，不隐藏标题或状态。动效必须有界，并在 `prefers-reduced-motion` 下关闭。
@@ -79,6 +84,7 @@ queued -> running -> completed
 ```
 
 running 状态允许重复输出 delta。terminal 事件拥有最终状态和权威输出。并发活动按 `callId` 隔离；projector 状态按 active assistant turn 和 session 隔离。session 切换只能重建或选择该 session 自己的 turns，不得共享组件本地展开状态。
+
 
 ## 5. 安全与隔离
 
@@ -114,3 +120,5 @@ running 状态允许重复输出 delta。terminal 事件拥有最终状态和权
 - **2026-09-12：** 标记为 `adk_thought` 的 A2A 文本 part 投影为 Studio thinking 事件；reasoning 与答案的累计 delta 状态相互隔离，避免一条流抑制或污染另一条流。
 - **2026-09-12：** A2A 流在已有答案增量但没有显式最终文本时结束，桥接会将累计答案作为一个完成态 Studio 事件输出一次；纯 reasoning 流仍保持未完成。
 - **2026-09-12：** 追加到同一 A2A artifact 的各 part 使用不同的投影 event ID；Studio 去重不得丢弃后续 reasoning part 或最终答案。
+
+- **2026-09-22 修正：** 通用 Codex 工具活动按原有契约保留 commentary、推理与后续外层文本，不应用子串或最终答案所有权过滤。MPA A2A 完全相同答案的去重归属 Runtime diagnostics CON-8/CON-11；不同文本与非文本活动保持可见。

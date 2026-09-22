@@ -2,7 +2,7 @@
 
 [中文版](2026-09-21-mpa-test-types.zh.md)
 
-- ID: mpa-test-types; created/revised: 2026-09-21; status: approved.
+- ID: mpa-test-types; created/revised: 2026-09-21; status: implemented.
 - Component: [Studio MPA creation](../../../specs/studio-mpa-creation/README.md).
 
 ## Background and scope
@@ -34,3 +34,17 @@ The user explicitly requested “有爆红啊，修一下” and clarified “�
 ## Verification
 
 2026-09-21 working diff: baseline Pyright fail (20 errors); TypeScript pass. Final checks not_run (pending). Browser/build not_applicable (no frontend changes); live cloud not_run (not relevant); pre-commit not_applicable (no commit requested).
+
+
+## Final review and verification (2026-09-21)
+
+Status: implemented. T-1/T-2/T-3 and AC-1/AC-2/AC-3 complete. Production diff contains only float annotations for existing durations, retaining default values; fixture edits retain behavioral/fault-injection assertions and use real profile contracts. No suppression or production contract weakening introduced.
+
+- pass: full scoped Pyright command above — 0 errors, 0 warnings (baseline 20 errors).
+- pass: MPA/CLI regression command above — 272 passed, one upstream Starlette deprecation warning.
+- pass: `frontend/node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` (executed from frontend with equivalent relative paths), no frontend edits.
+- pass: changed-file Ruff check/format, relative links, bilingual review and diff whitespace.
+- During iteration, signature alignment exposed one fake lock call without identity and four mock-engine dialect failures; corrected the test call and explicit dialect binding before the final 272-pass run. No failing regression deferred.
+- not_run: repository-wide regression, because only isolated MPA tests and duration annotations changed; full affected component/CLI suite passed. Browser/build/live cloud: not_applicable. Pre-commit/commit: not_applicable, no commit requested.
+
+- pass: repository-rule Gitleaks scan of all 10 changed code/test/design files; no secrets detected.
