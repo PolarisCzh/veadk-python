@@ -421,8 +421,10 @@ function resolve(appName: string): { app: string; ep: AdkEndpoint } {
   };
 }
 
-function isMpaEndpoint(ep: AdkEndpoint): boolean {
-  return Boolean(ep.runtimeId && (ep.agentCategory === "mpa" || ep.mpaInstanceId));
+function isMpaEndpoint(app: string, ep: AdkEndpoint): boolean {
+  // Discovery selects the transport; product metadata must not override A2A.
+  return app !== "a2a-default" &&
+    Boolean(ep.runtimeId && (ep.agentCategory === "mpa" || ep.mpaInstanceId));
 }
 
 /** fetch wrapper. Routing, in priority order:
@@ -862,7 +864,7 @@ export async function createSession(
   userId: string,
 ): Promise<string> {
   const { app, ep } = resolve(appName);
-  if (isMpaEndpoint(ep)) {
+  if (isMpaEndpoint(app, ep)) {
     const mpaInstanceId = await resolveMpaRuntimeInstanceId(ep);
     const statusRes = await apiFetch(
       `/api/v1/agents/${encodeURIComponent(mpaInstanceId)}/profile-status`,
@@ -952,7 +954,7 @@ export async function listSessions(
   userId: string,
 ): Promise<AdkSession[]> {
   const { app, ep } = resolve(appName);
-  if (isMpaEndpoint(ep)) {
+  if (isMpaEndpoint(app, ep)) {
     const res = await apiFetch("/api/v1/sessions", { cache: "no-store" }, ep);
     if (!res.ok) throw new Error(await mpaRuntimeSessionListError(res));
     const payload = (await res.json()) as { sessions?: AdkSession[] } | AdkSession[];
@@ -971,7 +973,7 @@ export async function getSession(
   sessionId: string,
 ): Promise<AdkSession> {
   const { app, ep } = resolve(appName);
-  if (isMpaEndpoint(ep)) {
+  if (isMpaEndpoint(app, ep)) {
     const res = await apiFetch(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { cache: "no-store" },
@@ -1339,7 +1341,7 @@ export async function deleteSession(
   sessionId: string,
 ): Promise<void> {
   const { app, ep } = resolve(appName);
-  if (isMpaEndpoint(ep)) {
+  if (isMpaEndpoint(app, ep)) {
     const res = await apiFetch(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { method: "DELETE" },
@@ -2103,7 +2105,15 @@ export function prefetchRuntimeAgentInfo(
 }
 
 export function isMpaRuntimeApp(appName: string): boolean {
-  return isMpaEndpoint(resolve(appName).ep);
+  const { app, ep } = resolve(appName);
+  return isMpaEndpoint(app, ep);
+}
+
+/** Product-scoped A2A presentation; general A2A apps must keep their defaults. */
+export function isMpaA2aRuntimeApp(appName: string): boolean {
+  const { app, ep } = resolve(appName);
+  return app === "a2a-default" &&
+    Boolean(ep.runtimeId && (ep.agentCategory === "mpa" || ep.mpaInstanceId));
 }
 
 /** One web-search hit (Volcengine WebSearch WebItem, trimmed for the UI). */
@@ -2341,7 +2351,7 @@ export async function* runSSE({
   let res: Response;
   const firstEventDeadline = runSseFirstEventDeadline(signal);
   try {
-    if (isMpaEndpoint(ep)) {
+    if (isMpaEndpoint(app, ep)) {
       const runRes = await apiFetch(
         `/api/v1/sessions/${encodeURIComponent(sessionId)}/run`,
         {

@@ -2,7 +2,7 @@
 
 - **Component ID:** `studio-runtime-diagnostics`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-09-12
+- **Revision:** 2026-09-22
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Owned code:** `frontend/server/runtime_logs.py`, `frontend/src/ui/RuntimeLogsDialog.tsx`, `veadk/cli/runtime_a2a_stream.py`, `frontend/src/adk/tokenUsage.ts`, `frontend/src/ui/TraceDrawer.tsx`, and the Runtime A2A BFF in `veadk/cli/cli_frontend.py`
@@ -40,3 +40,17 @@ Non-A2A agents and A2A agents without model capabilities retain the existing Com
 - `CON-6`: The A2A bridge emits a nonterminal connecting status before upstream waits. The transcript displays connecting/submitted/working as waiting/queued/running in the existing progress placeholder. Status is not an answer or proof of acceptance; content supersedes it. Valid streams wait until completion, error or cancellation, with no automatic retry.
 
 - `CON-7`: Authorized Runtime proxy requests carry the Studio principal owner as x-user-id, matching task management ownership; incoming identity headers cannot override it.
+
+- `CON-8` (implemented): For MPA A2A streams, a nonempty sandbox `invocation.completed.payload.finalMessage` is projected as a consolidated `turnComplete` answer with its sandbox invocationId. Legacy `text`/`message` payloads remain accepted. Only subsequent complete answer text parts exactly matching a boundary-trimmed sandbox final for that task are omitted. Distinct/extended text, reasoning, partial deltas, tools/errors and usage/status events remain. Empty, failed, cancelled, and unidentified-task events cannot claim this ownership. Identified sandbox source events project once per task across artifact updates and snapshots. State is decoder/request-local and is discarded on completion, disconnect or cancellation. Non-MPA and direct ADK/native session behavior is unchanged.
+
+`CON-8` is maintained by [MPA A2A final-answer ownership](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-a2a-final.md), verified in `tests/cli/test_runtime_a2a_stream.py` and cross-layer frontend replay. This addition does not promote the other draft contracts to implemented status.
+
+- `CON-9` (implemented): A Runtime app discovered as `a2a-default` uses the A2A bridge for session create/list/read/delete/run and skips native execution-config preflight, regardless of MPA category/instance metadata. Other MPA apps retain native Profile/session/run/SSE behavior; ordinary ADK apps are unchanged. Errors and cancellation never switch protocols. No session migration, auth change or persistence change is implied. See [A2A session routing](../../prd-spec/bugfixes/studio-session-protocol/2026-09-22-a2a-session-routing.md) and `frontend/tests/runSseAbort.test.mjs`.
+
+- `CON-10` (implemented): Explicit MPA A2A transcript mode reconciles adjacent matching/extending consolidated outer reasoning snapshots and evaluates empty-response notices across one user request. Partial deltas and sandbox events remain intact; genuinely empty completed requests retain one notice. General ADK/A2A and native MPA default behavior is unchanged. See [MPA A2A reasoning](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-a2a-reasoning.md). MPA sandbox consolidated events without authoritative thought text retain thinking blocks from the live-preview region while replacing answer preview. This preserves distinct sandbox reasoning after the final answer; authoritative thought snapshots retain replacement semantics. Explicit MPA A2A bridge mode normalizes multi-part outer thought snapshots independently of sandbox invocation segments. Additive `reasoningSegmentId` keeps delayed sandbox thought tails in their original block across tool.call; tool results and answer deltas separate phases. General/default decoding is unchanged.
+
+- `CON-11` (implemented): MPA A2A presents adjacent assistant fragments as one response with one footer, source-keyed request usage, last visible answer feedback identity and latest session-trace cutoff. Source turns and general-agent behavior remain unchanged. See [response grouping](../../prd-spec/features/mpa-response-grouping/2026-09-22-mpa-response-grouping.md).
+
+CON-8/CON-11 correction (implemented): preserve distinct outer text and reasoning after sandbox completion. Deduplicate only exact complete answer parts in the bridge; MPA grouped view may hide exact answer mirrors without mutating source turns and restores an extended fragment intact. General Codex tool behavior is restored. See [preserve follow-up](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-preserve-followup-content.md).
+
+- [MPA reasoning snapshot normalization](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-reasoning-snapshots.md).

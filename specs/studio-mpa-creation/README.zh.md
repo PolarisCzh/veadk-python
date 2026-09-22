@@ -66,3 +66,7 @@ CON-9 创建镜像：弹窗包含可编辑的 MPA/Worker 镜像输入框，使�
 CON-10 — Worker 恢复/诊断：暂时性 Worker 操作最多尝试 4 次，间隔 1/2/4 秒，受默认 600 秒阶段预算和总任务期限限制。创建重试保持同一载荷/ClientToken；仅已登记的托管 Worker 可恢复已识别的不存在错误。永久/未知错误和归属冲突立即失败。只含安全枚举的诊断记录到日志和 `task_diagnostics`（每任务最新 100 条，跨重试保留），绝不持久化原始异常数据。任务 HTTP 字段和错误码不变。见[已批准设计](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.zh.md)。
 
 CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具有持久化 ID/令牌/哈希的托管 Worker 仅在 Creating/Pending/Starting/Initializing/Provisioning 或无状态时可等待缺失 ID/项目/归属标签，最多 4 次不完整观测，等待 5/10/20 秒。Ready 缺失字段、已有值冲突、终态/未知状态以及无托管创建意图的 Worker 立即失败。固定字段诊断不包含值。见[可见性修复](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-metadata-visibility.zh.md)。
+
+## 自动 PG 粒度提案（尚未实现）
+
+[部署账号 PG 设计](../../prd-spec/features/mpa-serverless-pg/2026-09-21-deployment-account-pg.zh.md) 采用 ArkClaw 每个智能体独立业务 Workspace 的粒度。身份为部署账号 + 地域 + 稳定智能体 ID；同智能体重试复用其 Workspace，另一个智能体使用另一个 Workspace。所有 PG 调用使用 VeADK 部署凭据，不采用 ArkClaw 资源账号委托。已有 PG 模式和上文现行契约保持不变。独立共享注册库的初始化/资源数量和详细设计需要在实施前确认；业务 Workspace 绝不能隐式变成共享管理注册库。

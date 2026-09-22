@@ -12,6 +12,23 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+Runtime connections discovered as `a2a-default` keep the A2A session protocol,
+including when the agent is categorized as MPA. Session creation, history and
+chat use the same bridge and do not query native MPA execution configuration.
+Native MPA apps continue to use their Profile and session APIs; authentication
+errors never cause an automatic protocol switch.
+
+For MPA agents connected through A2A, Studio uses the sandbox's completed answer
+once and omits only exact complete outer-model answer copies for the same task.
+Distinct supplementary text, reasoning, and partial output remain available. Sandbox tool activity
+and token usage remain available. This normalization runs in the Studio backend;
+restart the local Studio process after updating it. Ordinary ADK chat is unaffected.
+
+MPA A2A transcripts also reconcile repeated consolidated outer reasoning
+snapshots. Empty-response notices are evaluated across the whole user request,
+so an intermediate reasoning fragment does not report an empty reply when tools
+or an answer follow. General agents retain their existing per-turn behavior.
+
 - **Agent publication review**: Developers deploy privately and apply from an
   Agent card. The review center's Agent tab lets administrators inspect the
   submitted Runtime metadata, approve with an optional comment, or return with
@@ -1457,3 +1474,7 @@ The production entry loads both component token stylesheets before rendering. Wh
 The MPA creation dialog pre-fills MPA and Worker image inputs from the server profile. Users with agent-management permission can edit either reference or leave it blank to use the configured default. Inputs lock on submission; retry and browser-session recovery preserve the original request and effective-image snapshot. URLs and credentials are rejected. These values affect only the requested creation, not the server YAML or existing agents. See [managed creation](../veadk/integrations/mpa/managed/README.md).
 
 MPA 创建弹窗默认填入服务端配置中的 MPA 和 Worker 镜像。有智能体管理权限的用户可以修改或留空使用默认值。提交后锁定输入，重试和浏览器会话恢复保留原请求及实际镜像快照。不接受网址或凭据。这些输入只影响本次创建，不修改服务端 YAML 或已有智能体。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
+
+MPA grouped replies hide exact answer mirrors only in their derived view: an extended fragment reappears intact, including its original prefix. General Codex tool activity preserves commentary and subsequent model text under its original behavior.

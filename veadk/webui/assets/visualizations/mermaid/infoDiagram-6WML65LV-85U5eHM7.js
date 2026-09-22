@@ -1,6 +1,0 @@
-<<<<<<<< HEAD:veadk/webui/assets/visualizations/mermaid/infoDiagram-6WML65LV-CstIx4YC.js
-import{a as e,at as s,aP as n,B as i}from"./mermaid.core-Dz_tRK9Y.js";import{p}from"./cynefin-OW5HDTMX-BPRXw8j2.js";import"../../app/index-CKbnL9AU.js";import"../../chunks/purify.es-BnINGy_Y.js";var g={parse:e(async r=>{const a=await p("info",r);s.debug(a)},"parse")},v={version:"11.16.1"},d=e(()=>v.version,"getVersion"),m={getVersion:d},c=e((r,a,o)=>{s.debug(`rendering info diagram
-========
-import{a as e,at as s,aP as n,B as i}from"./mermaid.core-ChTPY6rD.js";import{p}from"./cynefin-OW5HDTMX-D2uljBUK.js";import"../../app/index-Dr2P5LdG.js";import"../../chunks/purify.es-BnINGy_Y.js";var g={parse:e(async r=>{const a=await p("info",r);s.debug(a)},"parse")},v={version:"11.16.1"},d=e(()=>v.version,"getVersion"),m={getVersion:d},c=e((r,a,o)=>{s.debug(`rendering info diagram
->>>>>>>> 282d03cb (feat(studio): deliver MPA P0 control plane):veadk/webui/assets/visualizations/mermaid/infoDiagram-6WML65LV-D-sXruMj.js
-`+r);const t=n(a);i(t,100,400,!0),t.append("g").append("text").attr("x",100).attr("y",40).attr("class","version").attr("font-size",32).style("text-anchor","middle").text(`v${o}`)},"draw"),f={draw:c},w={parser:g,db:m,renderer:f};export{w as diagram};
