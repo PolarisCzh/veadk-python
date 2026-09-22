@@ -16,9 +16,9 @@
 
 Deploys a prebuilt mpa-agent image to VeFaaS behind APIG (key auth), seeds the
 external PostgreSQL ``mpa_meta`` row so the runtime skips ``GetMpaInstanceConf``,
-injects the runtime env (PostgreSQL + OpenViking as external parameters, identity
-adapted via ``IDENTITY_STARTUP_ENABLED=false`` + ``csi-<account_id>``), and
-verifies the instance is Studio-connectable over A2A. The veadk-version
+injects the runtime env (PostgreSQL + OpenViking as external parameters, with
+startup identity initialization enabled), and verifies the instance is
+Studio-connectable over A2A. The veadk-version
 mpa-agent needs no control-plane ``mi-*`` record.
 """
 

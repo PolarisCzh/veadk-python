@@ -126,10 +126,10 @@ def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     assert env["PGDATABASE"] == "mpa"
     assert env["PGUSER"] == "mpauser"
     assert env["PGPASSWORD"] == "pg-secret"
-    # Identity adaptation (FR-10)
-    assert env["IDENTITY_STARTUP_ENABLED"] == "false"
-    # veadk has no arkclaw identity pools/TIP issuer; APIG key-auth remains the
-    # outer access control for Studio and direct Runtime callers.
+    # Identity startup and Runtime ingress are configured independently.
+    assert env["IDENTITY_STARTUP_ENABLED"] == "true"
+    # APIG key-auth remains the outer access control for Studio and direct
+    # Runtime callers; user identity is initialized separately above.
     assert env["A2A_TIP_VERIFY_ENABLED"] == "false"
     assert env["MPA_LAZY_LOGIN"] == "false"
     assert env["APPCENTER_RESOURCE_DISCOVERY_ENABLED"] == "false"

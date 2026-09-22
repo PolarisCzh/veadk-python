@@ -147,8 +147,8 @@ def build_runtime_env(
     """Assemble the runtime environment variables for the mpa-agent function.
 
     In the veadk scenario the public endpoint is authoritative (FR-11) and
-    identity startup is disabled with a derived space id (FR-10). OpenViking and
-    Feishu keys are included only when supplied.
+    identity metadata is initialized at startup. OpenViking and Feishu keys are
+    included only when supplied.
     """
     claw_space_id = derive_claw_space_id(
         params.claw_space_id, account_id=params.account_id
@@ -180,8 +180,8 @@ def build_runtime_env(
         "CHANNEL_BACKEND": "postgresql",
         "CHANNEL_ADMIN_AUTH_MODE": "runtime_key",
         "SCHEDULED_TASK_BACKEND": "postgresql",
-        # Identity adaptation (FR-10): no arkclaw identity pools in this scenario.
-        "IDENTITY_STARTUP_ENABLED": "false",
+        # Resolve the configured UserPool before accepting user-facing traffic.
+        "IDENTITY_STARTUP_ENABLED": "true",
         # Advertise A2A to Studio's Runtime-key discovery probe. REST endpoints
         # require a user JWT; bypassing that gate incorrectly advertises ADK.
         "DISABLE_JWT_AUTH": "false",
