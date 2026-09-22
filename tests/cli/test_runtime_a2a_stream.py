@@ -1062,3 +1062,114 @@ def test_mpa_mixed_status_parts_and_cancelled_partial_remain_visible():
         author="outer",
     )
     assert _thought_text(projected) == "new thought"
+
+
+def _outer_thought_artifact(
+    chunks, *, kind="artifact-update", append=False, final=True
+):
+    artifact = {
+        "artifactId": "outer-final",
+        "parts": [
+            {"kind": "text", "text": text, "metadata": {"adk_thought": True}}
+            for text in chunks
+        ]
+        + [{"kind": "text", "text": "2"}],
+    }
+    if kind == "task":
+        return {
+            "kind": "task",
+            "id": "task-1",
+            "status": {"state": "completed"},
+            "artifacts": [artifact],
+        }
+    return {
+        "kind": kind,
+        "taskId": "task-1",
+        "append": append,
+        "lastChunk": final,
+        "artifact": artifact,
+    }
+
+
+@pytest.mark.parametrize("kind", ["artifact-update", "task"])
+@pytest.mark.parametrize("stream_first", [False, True])
+def test_mpa_final_tokenized_thought_artifact_is_one_snapshot(kind, stream_first):
+    chunks = [
+        "The",
+        " user",
+        " asks",
+        " a",
+        " question",
+        ".",
+        "\n\n",
+        "Answer",
+        " directly",
+        ".",
+        " ",
+    ]
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    output = []
+    if stream_first:
+        for chunk in chunks:
+            output += decoder.project(_thought_status([chunk]), author="outer")
+    event = _outer_thought_artifact(chunks, kind=kind)
+    before = json.dumps(event)
+    final = decoder.project(event, author="outer")
+    output += final
+    assert _thought_text(output) == "".join(chunks)
+    assert (
+        len(
+            {
+                e["customMetadata"]["reasoningSegmentId"]
+                for e in output
+                if _thought_text([e])
+            }
+        )
+        == 1
+    )
+    assert len([e for e in final if _thought_text([e])]) == (0 if stream_first else 1)
+    assert final[-1]["content"]["parts"] == [{"text": "2"}]
+    assert json.dumps(event) == before
+
+
+def test_mpa_tokenized_extended_snapshot_emits_only_suffix():
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    first = decoder.project(_thought_status(["The user"]), author="outer")
+    more = decoder.project(
+        _outer_thought_artifact(["The", " user", " asks", "."]), author="outer"
+    )
+    assert _thought_text(first + more) == "The user asks."
+    assert _thought_text(more) == " asks."
+
+
+def test_mpa_artifact_append_chunks_keep_whitespace_and_repeated_deltas():
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    first = _outer_thought_artifact(["ha", " "], append=True, final=False)
+    first["artifact"]["parts"].pop()
+    a = decoder.project(first, author="outer")
+    b = decoder.project(first, author="outer")
+    assert _thought_text(a + b) == "ha ha "
+    assert (
+        a[0]["customMetadata"]["reasoningSegmentId"]
+        == b[0]["customMetadata"]["reasoningSegmentId"]
+    )
+
+
+def test_mpa_thought_coalescing_keeps_non_thought_boundaries_and_default_behavior():
+    event = _outer_thought_artifact(["First", " thought"])
+    event["artifact"]["parts"] += [
+        {"kind": "text", "text": "Second", "metadata": {"adk_thought": True}}
+    ]
+    mpa = A2AStreamDecoder(mpa_a2a=True).project(event, author="outer")
+    assert [bool(e["content"]["parts"][0].get("thought")) for e in mpa] == [
+        True,
+        False,
+        True,
+    ]
+    generic = A2AStreamDecoder().project(event, author="outer")
+    assert [e["content"]["parts"][0]["text"] for e in generic] == [
+        "First",
+        "thought",
+        "2",
+        "Second",
+    ]

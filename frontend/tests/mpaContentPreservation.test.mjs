@@ -121,3 +121,34 @@ test('MPA delayed reasoning tail stays before its tool while later segments rema
  const general=projectLive([segment('d','Read skill','first'),call,segment('e','.','first')],{mpaA2a:false});
  assert.deepEqual(thoughts(general),['.']);
 });
+
+const directThought = event('direct-thought', [{ thought: true, text: 'Direct reasoning' }], {
+ partial: true, customMetadata: { projectionSource: 'a2a-status', reasoningSegmentId: 'outer-phase' },
+});
+const directDelta = event('direct-delta', [{ text: 'Preview answer' }], { partial: true });
+const directFinal = event('direct-final', [{ text: 'Corrected answer' }], { partial: false, turnComplete: true });
+test('MPA direct final retains completed reasoning and replaces only the answer preview', () => {
+ const events = [directThought, directDelta, directFinal];
+ for (const raw of [projectLive(events), api.eventsToTurns(events, {}, { mpaA2a: true })]) {
+  const turns = api.groupMpaTranscriptTurns(raw, true, false);
+  assert.deepEqual(thoughts(turns), ['Direct reasoning']);
+  assert.deepEqual(texts(turns), ['Corrected answer']);
+  assert.ok(turns.flatMap(t => t.blocks).filter(b => b.kind === 'thinking').every(b => b.done));
+  assert.equal(turns[0].meta.streaming, false);
+ }
+ for (const options of [{}, { mpaA2a: false }]) {
+  assert.deepEqual(thoughts(projectLive(events, options)), []);
+  assert.deepEqual(texts(projectLive(events, options)), ['Corrected answer']);
+ }
+});
+test('MPA outer reasoning survives tools and interruption but authoritative thought replaces preview', () => {
+ const toolCall = event('direct-call', [{ functionCall: { id: 'lookup', name: 'lookup', args: {} } }]);
+ const turns = projectLive([directThought, toolCall, directFinal]);
+ assert.deepEqual(thoughts(turns), ['Direct reasoning']);
+ assert.equal(turns.flatMap(t => t.blocks).filter(b => b.kind === 'tool').length, 1);
+ const snapshot = event('direct-snapshot', [{ thought: true, text: 'Authoritative reasoning' }], { partial: false });
+ assert.deepEqual(thoughts(projectLive([directThought, snapshot, directFinal])), ['Authoritative reasoning']);
+ const stopped = projectLive([directThought, directDelta]);
+ assert.deepEqual(thoughts(stopped), ['Direct reasoning']);
+ assert.deepEqual(texts(stopped), ['Preview answer']);
+});

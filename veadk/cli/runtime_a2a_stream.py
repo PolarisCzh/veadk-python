@@ -324,7 +324,10 @@ class A2AStreamDecoder:
         snapshot = (
             cumulative
             or metadata.get("reasoningSnapshot") is True
-            or item.get("partial") is False
+            or (
+                item.get("partial") is False
+                and metadata.get("reasoningSnapshot") is not False
+            )
             or (
                 sandbox
                 and state.deltas > 1
@@ -492,38 +495,75 @@ def a2a_event_to_studio_events(event: Any, *, author: str) -> list[dict[str, Any
 
 
 def _coalesce_mpa_thought_parts(event: Any) -> Any:
-    """Keep a status message's cumulative thought parts together for comparison."""
-    if not isinstance(event, Mapping) or event.get("kind") != "status-update":
+    """Normalize adjacent thought parts before splitting a message into events."""
+    if not isinstance(event, Mapping):
         return event
-    status = event.get("status")
-    if not isinstance(status, Mapping):
-        return event
-    message = status.get("message")
-    if not isinstance(message, Mapping):
-        return event
-    parts: list[Any] = []
-    for part in message.get("parts") or []:
-        metadata = part.get("metadata") if isinstance(part, Mapping) else None
-        previous_metadata = (
-            parts[-1].get("metadata")
-            if parts and isinstance(parts[-1], Mapping)
-            else None
-        )
-        if isinstance(metadata, Mapping) and metadata.get("adk_thought") is True:
-            if (
-                isinstance(previous_metadata, Mapping)
-                and previous_metadata.get("adk_thought") is True
-            ):
-                previous = parts[-1]
-                parts[-1] = {
-                    **previous,
-                    "text": str(previous.get("text") or "")
-                    + str(part.get("text") or ""),
-                    "metadata": {**previous["metadata"], "reasoningSnapshot": True},
-                }
-                continue
-        parts.append(part)
-    return {**event, "status": {**status, "message": {**message, "parts": parts}}}
+
+    def coalesce(container: Any, *, snapshot: bool | None) -> Any:
+        if not isinstance(container, Mapping):
+            return container
+        parts: list[Any] = []
+        for part in container.get("parts") or []:
+            metadata = part.get("metadata") if isinstance(part, Mapping) else None
+            previous_metadata = (
+                parts[-1].get("metadata")
+                if parts and isinstance(parts[-1], Mapping)
+                else None
+            )
+            if isinstance(metadata, Mapping) and metadata.get("adk_thought") is True:
+                if snapshot is not None:
+                    part = {
+                        **part,
+                        "metadata": {**metadata, "reasoningSnapshot": snapshot},
+                    }
+                if (
+                    isinstance(previous_metadata, Mapping)
+                    and previous_metadata.get("adk_thought") is True
+                ):
+                    previous = parts[-1]
+                    parts[-1] = {
+                        **previous,
+                        "text": str(previous.get("text") or "")
+                        + str(part.get("text") or ""),
+                        "metadata": {
+                            **previous_metadata,
+                            "reasoningSnapshot": snapshot
+                            if snapshot is not None
+                            else True,
+                        },
+                    }
+                    continue
+            parts.append(part)
+        return {**container, "parts": parts}
+
+    kind = event.get("kind")
+    if kind == "status-update":
+        status = event.get("status")
+        if not isinstance(status, Mapping):
+            return event
+        return {
+            **event,
+            "status": {
+                **status,
+                "message": coalesce(status.get("message"), snapshot=None),
+            },
+        }
+    if kind == "artifact-update":
+        return {
+            **event,
+            "artifact": coalesce(
+                event.get("artifact"), snapshot=event.get("append") is not True
+            ),
+        }
+    if kind == "task":
+        return {
+            **event,
+            "artifacts": [
+                coalesce(artifact, snapshot=True)
+                for artifact in event.get("artifacts") or []
+            ],
+        }
+    return event
 
 
 def _message_to_partial_events(
@@ -574,11 +614,15 @@ def _artifact_to_studio_events(
         if not isinstance(part, Mapping):
             continue
         metadata = part.get("metadata")
-        text = str(part.get("text") or "").strip()
+        thought = isinstance(metadata, Mapping) and metadata.get("adk_thought") is True
+        normalized_thought = (
+            thought
+            and isinstance(metadata, Mapping)
+            and "reasoningSnapshot" in metadata
+        )
+        raw_text = str(part.get("text") or "")
+        text = raw_text if normalized_thought else raw_text.strip()
         if text:
-            thought = (
-                isinstance(metadata, Mapping) and metadata.get("adk_thought") is True
-            )
             events.append(
                 _text_event(
                     text,
@@ -590,6 +634,11 @@ def _artifact_to_studio_events(
                     custom_metadata={
                         "thoughtKind": "reasoning",
                         "projectionSource": "a2a-artifact",
+                        **(
+                            {"reasoningSnapshot": metadata["reasoningSnapshot"]}
+                            if normalized_thought and isinstance(metadata, Mapping)
+                            else {}
+                        ),
                     }
                     if thought
                     else None,
