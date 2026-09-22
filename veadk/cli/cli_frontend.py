@@ -9658,7 +9658,8 @@ def _run_frontend_server(
 
         ak, sk, token = _resolve_ve_credentials()
         candidates: list[tuple[str, Any]] = []
-        candidate_refs: list[tuple[str, Any, str]] = []
+        all_candidate_refs: list[tuple[str, Any, str]] = []
+        tagged_candidate_refs: list[tuple[str, Any, str]] = []
         for region in _runtime_regions(provider, "all"):
             client = AgentkitRuntimeClient(
                 access_key=ak,
@@ -9674,15 +9675,14 @@ def _run_frontend_server(
                 response = client.list_runtimes(_rt.ListRuntimesRequest(**kwargs))
                 runtimes = response.agent_kit_runtimes or []
                 candidates.extend((region, runtime) for runtime in runtimes)
-                candidate_refs.extend(
-                    (region, client, runtime_id)
-                    for runtime in runtimes
-                    if (
-                        runtime_id := str(
-                            getattr(runtime, "runtime_id", "") or ""
-                        ).strip()
-                    )
-                )
+                for runtime in runtimes:
+                    runtime_id = str(getattr(runtime, "runtime_id", "") or "").strip()
+                    if not runtime_id:
+                        continue
+                    candidate_ref = (region, client, runtime_id)
+                    all_candidate_refs.append(candidate_ref)
+                    if _runtime_tags(runtime).get("veadk:agent-type") == "mpa":
+                        tagged_candidate_refs.append(candidate_ref)
                 next_token = str(getattr(response, "next_token", "") or "")
                 if not next_token:
                     break
@@ -9707,6 +9707,7 @@ def _run_frontend_server(
                     raise
                 return candidate_region, detail
 
+            candidate_refs = tagged_candidate_refs or all_candidate_refs
             with ThreadPoolExecutor(
                 max_workers=min(16, max(1, len(candidate_refs)))
             ) as executor:
