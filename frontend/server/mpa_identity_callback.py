@@ -23,6 +23,7 @@ MPA_RUNTIME_CALLBACK_PATH = "/identity/oauth/callback"
 MAX_STATE_LENGTH = 16 * 1024
 MAX_CALLBACK_RESPONSE_BYTES = 64 * 1024
 CALLBACK_TIMEOUT_SECONDS = 10.0
+MAX_USER_POOL_REDIRECTS = 5
 
 _SECURITY_HEADERS = {
     "Cache-Control": "private, no-store, max-age=0",
@@ -228,16 +229,35 @@ async def _relay_user_pool_callback(
     state: str,
 ) -> tuple[str, str]:
     callback_url = _validate_hosted_callback_url(hosted_callback_url)
-    response = await client.get(
-        callback_url,
-        params={"code": code, "state": state},
-        follow_redirects=False,
-    )
-    location = response.headers.get("location")
-    relayed = _parse_code_state_from_url(location, callback_url) if location else None
-    if relayed is None:
-        raise MpaIdentityCallbackError("UserPool relay did not return code and state")
-    return relayed
+    callback_origin = _normalize_https_origin(callback_url)
+    next_url = f"{callback_url}?{urlencode({'code': code, 'state': state})}"
+    for redirect_count in range(MAX_USER_POOL_REDIRECTS + 1):
+        response = await client.get(next_url, follow_redirects=False)
+        location = response.headers.get("location")
+        redirect_url = urljoin(str(response.url), location) if location else ""
+        relayed = (
+            _parse_code_state_from_url(redirect_url, str(response.url))
+            if redirect_url
+            else None
+        )
+        if relayed is not None:
+            return relayed
+        if not location or not 300 <= response.status_code < 400:
+            break
+        if redirect_count == MAX_USER_POOL_REDIRECTS:
+            raise MpaIdentityCallbackError("UserPool relay exceeded redirect limit")
+        try:
+            redirect_origin = _normalize_https_origin(redirect_url)
+        except ValueError:
+            raise MpaIdentityCallbackError(
+                "UserPool relay redirected to an invalid endpoint"
+            ) from None
+        if redirect_origin != callback_origin:
+            raise MpaIdentityCallbackError(
+                "UserPool relay redirected to an untrusted endpoint"
+            )
+        next_url = redirect_url
+    raise MpaIdentityCallbackError("UserPool relay did not return code and state")
 
 
 def _parse_runtime_payload(response: httpx.Response) -> dict[str, Any]:

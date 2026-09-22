@@ -370,11 +370,7 @@ def test_callback_rejects_runtime_redirect_without_leaking_credentials() -> None
 
 
 def test_callback_exposes_user_pool_relay_failure_stage() -> None:
-    app, _, requests = _app(
-        user_pool_location=(
-            "https://pool.example.com/login/consent?authRequestId=request-1"
-        )
-    )
+    app, _, requests = _app(user_pool_location=None)
 
     with TestClient(app, base_url="https://studio.example.com") as client:
         response = client.get(
@@ -444,6 +440,94 @@ async def test_user_pool_relay_requires_redirect_code_and_state() -> None:
     )
     try:
         with pytest.raises(MpaIdentityCallbackError, match="did not return"):
+            await _relay_user_pool_callback(
+                client,
+                "https://pool.example.com/login/generic_oauth/callback",
+                "idp-code",
+                _relay_state(),
+            )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_user_pool_relay_follows_same_origin_intermediate_redirects() -> None:
+    requests: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/login/generic_oauth/callback":
+            return httpx.Response(
+                302,
+                headers={
+                    "location": "/login/continue?request=request-1",
+                    "set-cookie": "relay=session; Path=/; Secure; HttpOnly",
+                },
+            )
+        assert request.url.path == "/login/continue"
+        assert request.headers["cookie"] == "relay=session"
+        return httpx.Response(
+            302,
+            headers={
+                "location": (
+                    "https://studio.example.com/oauth/callback"
+                    "?code=user-pool-code&state=user-pool-state"
+                )
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    try:
+        assert await _relay_user_pool_callback(
+            client,
+            "https://pool.example.com/login/generic_oauth/callback",
+            "idp-code",
+            _relay_state(),
+        ) == ("user-pool-code", "user-pool-state")
+    finally:
+        await client.aclose()
+
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("location", "error"),
+    [
+        ("https://evil.example.com/login/continue", "untrusted endpoint"),
+        ("http://pool.example.com/login/continue", "invalid endpoint"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_pool_relay_rejects_unsafe_intermediate_redirects(
+    location: str,
+    error: str,
+) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(302, headers={"location": location})
+        )
+    ) as client:
+        with pytest.raises(MpaIdentityCallbackError, match=error):
+            await _relay_user_pool_callback(
+                client,
+                "https://pool.example.com/login/generic_oauth/callback",
+                "idp-code",
+                _relay_state(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_user_pool_relay_limits_intermediate_redirects() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                302,
+                headers={"location": "/login/continue"},
+            )
+        )
+    )
+    try:
+        with pytest.raises(MpaIdentityCallbackError, match="redirect limit"):
             await _relay_user_pool_callback(
                 client,
                 "https://pool.example.com/login/generic_oauth/callback",
