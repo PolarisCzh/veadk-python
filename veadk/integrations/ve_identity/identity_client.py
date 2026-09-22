@@ -986,6 +986,42 @@ class IdentityClient:
         return response.uid, response.client_secret
 
     @refresh_credentials
+    def list_identity_providers(self, user_pool_uid: str) -> list[dict[str, Any]]:
+        """List normalized identity-provider metadata for one user pool."""
+        from typing import cast
+
+        from volcenginesdkid import (
+            ListIdentityProvidersRequest,
+            ListIdentityProvidersResponse,
+        )
+
+        providers: list[dict[str, Any]] = []
+        page_number = 1
+        while True:
+            response = cast(
+                ListIdentityProvidersResponse,
+                self._api_client.list_identity_providers(
+                    ListIdentityProvidersRequest(
+                        user_pool_uid=user_pool_uid,
+                        page_number=page_number,
+                        page_size=100,
+                    )
+                ),
+            )
+            page = response.data or []
+            for item in page:
+                providers.append(
+                    {
+                        "uid": str(item.uid or ""),
+                        "connection_type": str(item.connection_type or ""),
+                        "enabled": bool(item.enabled),
+                    }
+                )
+            if not page or len(providers) >= int(response.total_count or 0):
+                return providers
+            page_number += 1
+
+    @refresh_credentials
     def register_callback_for_user_pool_client(
         self,
         user_pool_uid: str,
@@ -1010,14 +1046,12 @@ class IdentityClient:
             request
         )
 
-        allowed_callback_urls = response.allowed_callback_urls
-        if not allowed_callback_urls:
-            allowed_callback_urls = []
-        allowed_callback_urls.append(callback_url)
-        allowed_web_origins = response.allowed_web_origins
-        if not allowed_web_origins:
-            allowed_web_origins = []
-        allowed_web_origins.append(web_origin)
+        allowed_callback_urls = list(response.allowed_callback_urls or [])
+        if callback_url not in allowed_callback_urls:
+            allowed_callback_urls.append(callback_url)
+        allowed_web_origins = list(response.allowed_web_origins or [])
+        if web_origin not in allowed_web_origins:
+            allowed_web_origins.append(web_origin)
 
         request2 = UpdateUserPoolClientRequest(
             user_pool_uid=user_pool_uid,

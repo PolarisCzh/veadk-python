@@ -1284,7 +1284,15 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
             "web_origin": "https://studio.example.com",
             "dismiss_login_page_enabled": False,
             "skip_consent_enabled": True,
-        }
+        },
+        {
+            "user_pool_uid": "legacy-user-pool",
+            "client_uid": "legacy-user-pool-client",
+            "callback_url": "https://studio.example.com/oauth/callback",
+            "web_origin": "https://studio.example.com",
+            "dismiss_login_page_enabled": False,
+            "skip_consent_enabled": True,
+        },
     ]
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True

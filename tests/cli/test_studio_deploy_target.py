@@ -1023,6 +1023,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     provider: str,
 ) -> None:
     captured: dict[str, object] = {}
+    callbacks: list[dict[str, object]] = []
     credential_tool_ids: list[str] = []
     monkeypatch.setitem(
         veadk_environments,
@@ -1052,6 +1053,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
 
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
+            callbacks.append(kwargs)
 
         def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
             captured["configured_user_pool"] = user_pool_uid
@@ -1176,6 +1178,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
     assert callback["skip_consent_enabled"] is True
+    assert {item["callback_url"] for item in callbacks} == {
+        "https://studio.example.com/oauth2/callback",
+        "https://studio.example.com/oauth/callback",
+    }
     assert "configured_user_pool" not in captured
     assert "Preserved the existing Identity user pool login settings." in result.output
 
@@ -2381,6 +2387,92 @@ def test_register_callback_only_sends_requested_login_switches(
     assert {
         key: serialized_request[key] for key in expected_switches
     } == expected_switches
+
+
+def test_list_identity_providers_returns_normalized_enabled_entries() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.list_identity_providers.side_effect = [
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="provider-1",
+                    name="feishu",
+                    provider="feishu",
+                    connection_type="OAuth",
+                    enabled=True,
+                )
+            ],
+            total_count=2,
+        ),
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="provider-2",
+                    name="disabled",
+                    provider="oidc",
+                    connection_type="OIDC",
+                    enabled=False,
+                )
+            ],
+            total_count=2,
+        ),
+    ]
+
+    assert identity_client.list_identity_providers("pool-id") == [
+        {
+            "uid": "provider-1",
+            "connection_type": "OAuth",
+            "enabled": True,
+        },
+        {
+            "uid": "provider-2",
+            "connection_type": "OIDC",
+            "enabled": False,
+        },
+    ]
+    requests = [
+        call.args[0]
+        for call in identity_client._api_client.list_identity_providers.call_args_list
+    ]
+    assert [(item.page_number, item.page_size) for item in requests] == [
+        (1, 100),
+        (2, 100),
+    ]
+
+
+def test_register_callback_does_not_duplicate_existing_values() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.get_user_pool_client.return_value = SimpleNamespace(
+        allowed_callback_urls=["https://studio.example.com/oauth/callback"],
+        allowed_web_origins=["https://studio.example.com"],
+        name="studio-client",
+        description=None,
+        allowed_logout_urls=None,
+        allowed_cors=None,
+        id_token=None,
+        refresh_token=None,
+    )
+
+    identity_client.register_callback_for_user_pool_client(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        callback_url="https://studio.example.com/oauth/callback",
+        web_origin="https://studio.example.com",
+    )
+
+    request = identity_client._api_client.update_user_pool_client.call_args.args[0]
+    assert request.allowed_callback_urls == [
+        "https://studio.example.com/oauth/callback"
+    ]
+    assert request.allowed_web_origins == ["https://studio.example.com"]
 
 
 def test_configure_user_pool_for_idp_only_disables_local_account_flows() -> None:

@@ -19,6 +19,7 @@ import itertools
 import json
 import logging
 import time
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -533,6 +534,152 @@ def test_project_handoff_pairing_authorizes_only_terminal_session_routes(
     assert "/web/sandbox/codex-project-handoff/sessions" in captured["exempt_paths"]
     assert "/web/sandbox/codex-project-handoff/sessions/" in captured["exempt_prefixes"]
     assert "/web/sandbox/codex-project-handoff/pairings" not in captured["exempt_paths"]
+    assert "/oauth/callback" in captured["exempt_paths"]
+
+
+def test_mpa_runtime_resolver_loads_runtime_details_before_matching(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from frontend.server.mpa_identity_callback import (
+        MpaCallbackTarget,
+        MpaIdentityCallbackError,
+    )
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    captured: dict[str, Any] = {}
+    requests: list[tuple[str, str]] = []
+    mode = {"value": "success"}
+    runtime_summary = SimpleNamespace(
+        runtime_id="runtime-1",
+        envs=[],
+        tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")],
+    )
+    runtime_detail = SimpleNamespace(
+        runtime_id="runtime-1",
+        envs=[SimpleNamespace(key="MPA_AGENT_ID", value="mi-agent1")],
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example.com",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+    )
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            requests.append(("list", self.region))
+            if mode["value"] == "duplicate":
+                return SimpleNamespace(
+                    agent_kit_runtimes=[runtime_summary, runtime_summary],
+                    next_token="",
+                )
+            return SimpleNamespace(
+                agent_kit_runtimes=[runtime_summary],
+                next_token="",
+            )
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            requests.append(("get", request.runtime_id))
+            if mode["value"] in {"missing", "failure"}:
+                raise RuntimeError("detail unavailable")
+            return runtime_detail
+
+    class _FakeIdentityClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def list_identity_providers(self, pool_uid: str) -> list[dict[str, object]]:
+            assert pool_uid == "pool-current"
+            return [
+                {
+                    "uid": "provider-1",
+                    "connection_type": "OAuth",
+                    "enabled": True,
+                }
+            ]
+
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **_: SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url=None,
+            issuer="https://identity.example.com",
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: object(),
+    )
+    monkeypatch.setattr(
+        "frontend.server.mpa_identity_callback.mount_mpa_identity_callback",
+        lambda *_, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._runtime_regions",
+        lambda *_: ["cn-beijing"],
+    )
+
+    _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+    )
+    hosted_callback = asyncio.run(captured["hosted_callback_resolver"]("provider-1"))
+    credentials = asyncio.run(
+        captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+    )
+
+    assert hosted_callback == (
+        "https://identity.example.com/login/generic_oauth/callback"
+    )
+    assert credentials.endpoint_origin == "https://runtime.example.com"
+    assert credentials.api_key == "runtime-api-key"
+    assert requests == [("list", "cn-beijing"), ("get", "runtime-1")]
+
+    mode["value"] = "duplicate"
+    with pytest.raises(MpaIdentityCallbackError, match="not unique"):
+        asyncio.run(
+            captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+        )
+
+    mode["value"] = "missing"
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend.is_agentkit_resource_not_found",
+        lambda _: True,
+    )
+    with pytest.raises(MpaIdentityCallbackError, match="not found"):
+        asyncio.run(
+            captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+        )
+
+    mode["value"] = "failure"
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend.is_agentkit_resource_not_found",
+        lambda _: False,
+    )
+    with pytest.raises(RuntimeError, match="detail unavailable"):
+        asyncio.run(
+            captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+        )
 
 
 def test_github_app_webhook_bypasses_studio_sso(

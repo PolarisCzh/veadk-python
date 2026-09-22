@@ -9817,6 +9817,74 @@ def _run_frontend_server(
                 break
         return matches[0] if matches else None
 
+    def _resolve_mpa_runtime_credentials(target: Any) -> Any:
+        """Resolve one MPA Runtime from its control-plane environment metadata."""
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+        from frontend.server.mpa_identity_callback import (
+            MpaRuntimeCredentials,
+            select_mpa_runtime,
+        )
+
+        ak, sk, token = _resolve_ve_credentials()
+        candidate_refs: list[tuple[str, Any, str]] = []
+        for region in _runtime_regions(provider, "all"):
+            client = AgentkitRuntimeClient(
+                access_key=ak,
+                secret_key=sk,
+                session_token=token or "",
+                region=region,
+            )
+            next_token = ""
+            for _ in range(20):
+                kwargs: dict[str, Any] = {"page_size": 100}
+                if next_token:
+                    kwargs["next_token"] = next_token
+                response = client.list_runtimes(_rt.ListRuntimesRequest(**kwargs))
+                runtimes = response.agent_kit_runtimes or []
+                for runtime in runtimes:
+                    runtime_id = str(getattr(runtime, "runtime_id", "") or "").strip()
+                    if (
+                        runtime_id
+                        and _runtime_tags(runtime).get("veadk:agent-type") == "mpa"
+                    ):
+                        candidate_refs.append((region, client, runtime_id))
+                next_token = str(getattr(response, "next_token", "") or "")
+                if not next_token:
+                    break
+
+        def _get_runtime_detail(
+            candidate: tuple[str, Any, str],
+        ) -> tuple[str, Any] | None:
+            candidate_region, client, runtime_id = candidate
+            try:
+                detail = client.get_runtime(_rt.GetRuntimeRequest(RuntimeId=runtime_id))
+            except Exception as detail_error:
+                if is_agentkit_resource_not_found(detail_error):
+                    return None
+                raise
+            return candidate_region, detail
+
+        with ThreadPoolExecutor(
+            max_workers=min(16, max(1, len(candidate_refs)))
+        ) as executor:
+            detailed_candidates = [
+                detail
+                for detail in executor.map(_get_runtime_detail, candidate_refs)
+                if detail is not None
+            ]
+        region, runtime = select_mpa_runtime(detailed_candidates, target)
+        endpoint, api_key, auth_type, network_type = _resolve_runtime_conn(
+            str(getattr(runtime, "runtime_id", "") or ""),
+            region,
+            runtime,
+        )
+        if auth_type != "key_auth" or not api_key:
+            raise RuntimeError("MPA Runtime must use key authentication")
+        if network_type != "public":
+            raise RuntimeError("MPA Runtime must expose a public endpoint")
+        return MpaRuntimeCredentials(endpoint, api_key)
+
     def _authorized_runtime(
         request: Request,
         runtime_id: str,
@@ -13112,12 +13180,52 @@ def _run_frontend_server(
                     "/web/sandbox/codex-project-handoff/sessions",
                     "/web/sandbox/codex-project-upload/sessions",
                     "/web/ui-config",
+                    "/oauth/callback",
                 },
                 exempt_prefixes={
                     "/assets",
                     "/skillhub",
                     "/web/sandbox/codex-project-handoff/sessions/",
                 },
+            )
+
+            from frontend.server.mpa_identity_callback import (
+                build_user_pool_hosted_callback_url,
+                mount_mpa_identity_callback,
+            )
+
+            configured_oauth2 = oauth2_config
+
+            async def _resolve_mpa_hosted_callback(provider_id: str) -> str:
+                def _resolve() -> str:
+                    identity_client = _identity_client()
+                    pool_uid, _ = _current_studio_identity_ids(identity_client)
+                    if not pool_uid:
+                        raise RuntimeError("Studio UserPool is not configured")
+                    matches = [
+                        item
+                        for item in identity_client.list_identity_providers(pool_uid)
+                        if item["enabled"] and item["uid"] == provider_id
+                    ]
+                    if len(matches) != 1:
+                        raise RuntimeError("Identity provider is unavailable")
+                    issuer = str(configured_oauth2.issuer or "").strip()
+                    if not issuer:
+                        raise RuntimeError("Studio UserPool issuer is unavailable")
+                    return build_user_pool_hosted_callback_url(
+                        issuer,
+                        matches[0]["connection_type"],
+                    )
+
+                return await asyncio.to_thread(_resolve)
+
+            async def _resolve_mpa_runtime(target: Any) -> Any:
+                return await asyncio.to_thread(_resolve_mpa_runtime_credentials, target)
+
+            mount_mpa_identity_callback(
+                app,
+                hosted_callback_resolver=_resolve_mpa_hosted_callback,
+                runtime_credentials_resolver=_resolve_mpa_runtime,
             )
             logger.info(
                 f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
@@ -17610,6 +17718,7 @@ def frontend_deploy(
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
+        mpa_callback_uri = f"{url}/oauth/callback"
 
         from veadk.integrations.ve_identity.identity_client import IdentityClient
 
@@ -17628,19 +17737,21 @@ def frontend_deploy(
         #    id:UpdateUserPoolClient, so it can't register the callback itself.
         if url:
             try:
-                identity_client.register_callback_for_user_pool_client(
-                    user_pool_uid=user_pool_id,
-                    client_uid=allowed_client_id,
-                    callback_url=redirect_uri,
-                    web_origin=url,
-                    dismiss_login_page_enabled=False,
-                    skip_consent_enabled=True,
-                )
-                click.echo(f"Registered SSO callback: {redirect_uri}")
+                for callback_url in (redirect_uri, mpa_callback_uri):
+                    identity_client.register_callback_for_user_pool_client(
+                        user_pool_uid=user_pool_id,
+                        client_uid=allowed_client_id,
+                        callback_url=callback_url,
+                        web_origin=url,
+                        dismiss_login_page_enabled=False,
+                        skip_consent_enabled=True,
+                    )
+                    click.echo(f"Registered SSO callback: {callback_url}")
             except Exception as e:
                 click.echo(
-                    f"⚠️  Could not register the SSO callback ({e}). Add "
-                    f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
+                    f"⚠️  Could not register the Studio callbacks ({e}). Add "
+                    f"{redirect_uri} and {mpa_callback_uri} to the user-pool "
+                    "client's allowed callback URLs manually."
                 )
 
         # 5) Two-phase: now that the public URL is known, inject the correct
@@ -18143,6 +18254,7 @@ def frontend_update(
         public_url = target.url.rstrip("/")
         if public_url and user_pool_id and user_pool_client_id:
             redirect_uri = f"{public_url}/oauth2/callback"
+            mpa_callback_uri = f"{public_url}/oauth/callback"
             environment_overrides["OAUTH2_REDIRECT_URI"] = redirect_uri
             from veadk.integrations.ve_identity.identity_client import IdentityClient
 
@@ -18154,19 +18266,21 @@ def frontend_update(
                 provider=provider_id,
             )
             try:
-                identity_client.register_callback_for_user_pool_client(
-                    user_pool_uid=user_pool_id,
-                    client_uid=user_pool_client_id,
-                    callback_url=redirect_uri,
-                    web_origin=public_url,
-                    dismiss_login_page_enabled=False,
-                    skip_consent_enabled=True,
-                )
-                click.echo(f"Registered SSO callback: {redirect_uri}")
+                for callback_url in (redirect_uri, mpa_callback_uri):
+                    identity_client.register_callback_for_user_pool_client(
+                        user_pool_uid=user_pool_id,
+                        client_uid=user_pool_client_id,
+                        callback_url=callback_url,
+                        web_origin=public_url,
+                        dismiss_login_page_enabled=False,
+                        skip_consent_enabled=True,
+                    )
+                    click.echo(f"Registered SSO callback: {callback_url}")
             except Exception as error:
                 click.echo(
-                    f"Warning: Could not register the SSO callback ({error}). Add "
-                    f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
+                    f"Warning: Could not register the Studio callbacks ({error}). Add "
+                    f"{redirect_uri} and {mpa_callback_uri} to the user-pool "
+                    "client's allowed callback URLs manually."
                 )
 
         account_resolution = resolve_studio_account_id_metadata(
