@@ -57,6 +57,9 @@ def _base_args(**overrides: str) -> list[str]:
         "--model-api-key": "model-secret",
         "--model-name": "doubao-seed",
         "--agentkit-tool-id": "tool-1",
+        "--user-pool-name": "studio-userpool",
+        "--user-pool-client-name": "studio-client",
+        "--identity-callback-url": "https://studio.example.com/oauth/callback",
     }
     for key, value in overrides.items():
         args[f"--{key.replace('_', '-')}"] = value
@@ -198,6 +201,9 @@ def test_create_config_yaml_supplies_defaults(
         "model-api-key": "model-secret",
         "model-name": "doubao-seed",
         "agentkit-tool-id": "tool-1",
+        "user-pool-name": "studio-userpool",
+        "user-pool-client-name": "studio-client",
+        "identity-callback-url": "https://studio.example.com/oauth/callback",
         "compute-plane": "vefaas",
     }
     cfg_path = tmp_path / "mpa-create.config.yaml"
@@ -231,6 +237,9 @@ def test_create_cli_option_overrides_config(tmp_path) -> None:
         "model-api-key": "model-secret",
         "model-name": "doubao-seed",
         "agentkit-tool-id": "tool-1",
+        "user-pool-name": "studio-userpool",
+        "user-pool-client-name": "studio-client",
+        "identity-callback-url": "https://studio.example.com/oauth/callback",
         "compute-plane": "vefaas",
     }
     cfg_path = tmp_path / "mpa-create.config.yaml"

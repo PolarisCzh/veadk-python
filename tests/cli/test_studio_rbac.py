@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 from veadk.cli.cli_frontend import (
     _adapt_migration_model_envs,
     _anchor_environment_registry,
+    _build_mpa_identity_runtime_env,
     _create_runtime_with_description_fallback,
     _is_malformed_runtime_description_error,
     _mcp_deployment_error_detail,
@@ -80,6 +81,27 @@ def _mpa_p0_compat_manifest(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def test_build_mpa_identity_runtime_env_uses_studio_callback_origin() -> None:
+    assert _build_mpa_identity_runtime_env(
+        user_pool_name=" studio-userpool ",
+        user_pool_client_name=" studio-client ",
+        oauth2_redirect_uri=(
+            "https://studio.example.com/oauth2/callback?ignored=true"
+        ),
+    ) == {
+        "IDENTITY_STARTUP_ENABLED": "true",
+        "MPA_USER_POOL_NAME": "studio-userpool",
+        "MPA_USER_POOL_CLIENT_NAME": "studio-client",
+        "IDENTITY_CALLBACK_URL": "https://studio.example.com/oauth/callback",
+    }
+    with pytest.raises(ValueError, match="configuration is incomplete"):
+        _build_mpa_identity_runtime_env(
+            user_pool_name="",
+            user_pool_client_name="studio-client",
+            oauth2_redirect_uri="https://studio.example.com/oauth2/callback",
+        )
 
 
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
@@ -232,8 +254,11 @@ def _create_studio_app(
     auth_mode: str = "frontend",
     admins: str | None = None,
     developers: str | None = None,
+    oauth2_user_pool: str | None = None,
+    oauth2_user_pool_client: str | None = None,
     oauth2_user_pool_uid: str | None = None,
     oauth2_user_pool_client_uid: str | None = None,
+    oauth2_redirect_uri: str | None = None,
     oauth2_provider_label: str | None = None,
     provider: str = "volcengine",
 ) -> FastAPI:
@@ -268,11 +293,11 @@ def _create_studio_app(
         port=8765,
         dev=True,
         vite=True,
-        oauth2_user_pool=None,
-        oauth2_user_pool_client=None,
+        oauth2_user_pool=oauth2_user_pool,
+        oauth2_user_pool_client=oauth2_user_pool_client,
         oauth2_user_pool_uid=oauth2_user_pool_uid,
         oauth2_user_pool_client_uid=oauth2_user_pool_client_uid,
-        oauth2_redirect_uri=None,
+        oauth2_redirect_uri=oauth2_redirect_uri,
         oauth2_provider=None,
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
@@ -5483,6 +5508,7 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     tmp_path: Path,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
 
     runtime = _runtime_with_public_endpoint(
         _runtime("runtime-mpa-compatible", "developer", managed=False)
@@ -5492,6 +5518,7 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     runtime.role_name = "runtime-role"
     runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
     update_requests: list[Any] = []
+    captured_config: dict[str, Any] = {}
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         runtime.current_version_number = 4 if update_requests else 3
@@ -5501,7 +5528,10 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
         update_requests.append(request)
         return SimpleNamespace(runtime_id=runtime.runtime_id)
 
-    def launch(**_kwargs: Any) -> SimpleNamespace:
+    def launch(**kwargs: Any) -> SimpleNamespace:
+        captured_config.update(
+            yaml.safe_load(Path(kwargs["config_file"]).read_text(encoding="utf-8"))
+        )
         AgentkitRuntimeClient.update_runtime(
             object(),
             SimpleNamespace(tags=[], apmplus_enable=False),
@@ -5530,6 +5560,37 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     monkeypatch.setattr(
         "veadk.auth.veauth.ark_veauth.get_ark_token",
         lambda **_kwargs: "test-only-model-key",
+    )
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **_: SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url=None,
+            issuer="https://identity.example.com",
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: object(),
+    )
+
+    class FakeIdentityClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def get_user_pool_resource_names(
+            self,
+            user_pool_uid: str,
+            client_uid: str,
+        ) -> tuple[str, str]:
+            assert (user_pool_uid, client_uid) == ("pool-current", "client-current")
+            return "studio-userpool", "studio-client"
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        FakeIdentityClient,
     )
 
     class RuntimeAsyncClient:
@@ -5562,7 +5623,14 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
             )
 
     monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
-    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="client-current",
+        oauth2_redirect_uri="https://studio.example.com/oauth2/callback",
+    )
     headers = {"X-VeADK-Local-User": "developer"}
 
     with TestClient(app) as client:
@@ -5604,6 +5672,12 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     assert frames[-1]["success"] is True
     assert frames[-1]["runtimeId"] == runtime.runtime_id
     assert len(update_requests) == 1
+    runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert runtime_envs["MPA_USER_POOL_NAME"] == "studio-userpool"
+    assert runtime_envs["MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+    assert runtime_envs["IDENTITY_CALLBACK_URL"] == (
+        "https://studio.example.com/oauth/callback"
+    )
 
 
 def test_update_deployment_rechecks_runtime_identity_before_update(

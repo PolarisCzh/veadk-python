@@ -48,6 +48,9 @@ def _params(**overrides) -> MpaProvisionParams:
         model_api_key="model-secret",
         model_name="doubao-seed",
         agentkit_tool_id="tool-1",
+        user_pool_name="studio-userpool",
+        user_pool_client_name="studio-client",
+        identity_callback_url="https://studio.example.com/oauth/callback",
     )
     return replace(base, **overrides)
 
@@ -107,7 +110,7 @@ def test_tool_name_is_derived_from_agent_id() -> None:
 
 
 def test_env_contains_startup_keys_and_identity_adaptation() -> None:
-    """VC-10: env carries all startup keys, identity disabled, space derived."""
+    """VC-10: env carries all startup keys, identity enabled, space derived."""
     env = build_runtime_env(_params(), public_endpoint="https://app.example.com")
 
     # Model
@@ -140,8 +143,21 @@ def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     assert env["MPA_AGENT_ID"] == "mi-abc123def456"
     assert env["MPA_WORKLOAD_POOL_NAME"] == "agentkit-studio-workload"
     assert env["MPA_WORKLOAD_IDENTITY_NAME"] == "mi-abc123def456-studio"
+    assert env["MPA_USER_POOL_NAME"] == "studio-userpool"
+    assert env["MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+    assert env["IDENTITY_CALLBACK_URL"] == (
+        "https://studio.example.com/oauth/callback"
+    )
     # AgentKit
     assert env["AGENTKIT_TOOL_ID"] == "tool-1"
+
+
+def test_env_rejects_partial_user_pool_identity_configuration() -> None:
+    with pytest.raises(ValueError, match="MPA_USER_POOL_CLIENT_NAME"):
+        build_runtime_env(
+            _params(user_pool_client_name=""),
+            public_endpoint="https://app.example.com",
+        )
 
 
 def test_env_uses_public_endpoint_for_codex_worker_preference() -> None:

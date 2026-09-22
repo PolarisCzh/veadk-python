@@ -1022,6 +1022,35 @@ class IdentityClient:
             page_number += 1
 
     @refresh_credentials
+    def get_user_pool_resource_names(
+        self,
+        user_pool_uid: str,
+        client_uid: str,
+    ) -> tuple[str, str]:
+        """Resolve the names that mpa-agent expects from configured UIDs."""
+        from volcenginesdkid import (
+            GetUserPoolClientRequest,
+            GetUserPoolClientResponse,
+            GetUserPoolRequest,
+            GetUserPoolResponse,
+        )
+
+        pool: GetUserPoolResponse = self._api_client.get_user_pool(
+            GetUserPoolRequest(user_pool_uid=user_pool_uid)
+        )
+        client: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            GetUserPoolClientRequest(
+                user_pool_uid=user_pool_uid,
+                client_uid=client_uid,
+            )
+        )
+        pool_name = str(pool.name or "").strip()
+        client_name = str(client.name or "").strip()
+        if not pool_name or not client_name:
+            raise ValueError("UserPool or client name is unavailable")
+        return pool_name, client_name
+
+    @refresh_credentials
     def register_callback_for_user_pool_client(
         self,
         user_pool_uid: str,

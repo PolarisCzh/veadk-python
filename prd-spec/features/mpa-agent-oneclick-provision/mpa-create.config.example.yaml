@@ -22,6 +22,12 @@ registry-name: agentkit-platform-<account>
 # account-id: "<expected-account>"
 region: cn-beijing
 
+# --- Identity (reuse the Studio UserPool and client by name) ---
+identity-region: cn-beijing
+user-pool-name: agentkit-studio-userpool
+user-pool-client-name: agentkit-studio-client
+identity-callback-url: https://<studio-domain>/oauth/callback
+
 # --- PostgreSQL ---
 # Managed auto mode obtains both Workspace connections using deployment STS.
 # No PG credentials are required here. Legacy `mpa create` / manual profiles

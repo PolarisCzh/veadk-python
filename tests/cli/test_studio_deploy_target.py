@@ -2444,6 +2444,33 @@ def test_list_identity_providers_returns_normalized_enabled_entries() -> None:
     ]
 
 
+def test_get_user_pool_resource_names_resolves_both_configured_uids() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.get_user_pool.return_value = SimpleNamespace(
+        name="studio-userpool"
+    )
+    identity_client._api_client.get_user_pool_client.return_value = SimpleNamespace(
+        name="studio-client"
+    )
+
+    assert identity_client.get_user_pool_resource_names(
+        "pool-id", "client-id"
+    ) == ("studio-userpool", "studio-client")
+    pool_request = identity_client._api_client.get_user_pool.call_args.args[0]
+    client_request = identity_client._api_client.get_user_pool_client.call_args.args[0]
+    assert pool_request.user_pool_uid == "pool-id"
+    assert client_request.user_pool_uid == "pool-id"
+    assert client_request.client_uid == "client-id"
+
+    identity_client._api_client.get_user_pool.return_value = SimpleNamespace(name="")
+    with pytest.raises(ValueError, match="name is unavailable"):
+        identity_client.get_user_pool_resource_names("pool-id", "client-id")
+
+
 def test_register_callback_does_not_duplicate_existing_values() -> None:
     identity_client = IdentityClient(
         access_key="test_access_key",

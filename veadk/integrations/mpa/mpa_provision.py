@@ -66,6 +66,9 @@ class MpaProvisionParams:
     agentkit_tool_region: str = "cn-beijing"
     skill_space_id: str = ""
     identity_region: str = "cn-beijing"
+    user_pool_name: str = ""
+    user_pool_client_name: str = ""
+    identity_callback_url: str = ""
     openviking_url: str = ""
     openviking_resource_id: str = ""
     openviking_api_key: str = ""
@@ -213,6 +216,20 @@ def build_runtime_env(
         "MPA_CODEX_WORKER_ENDPOINT_PREFERENCE": "public",
         "MPA_CODEX_WORKER_ALLOW_PUBLIC_FALLBACK": "true",
     }
+
+    identity_values = {
+        "MPA_USER_POOL_NAME": params.user_pool_name.strip(),
+        "MPA_USER_POOL_CLIENT_NAME": params.user_pool_client_name.strip(),
+        "IDENTITY_CALLBACK_URL": params.identity_callback_url.strip(),
+    }
+    if any(identity_values.values()):
+        missing = [key for key, value in identity_values.items() if not value]
+        if missing:
+            raise ValueError(
+                "MPA UserPool identity configuration is incomplete: "
+                + ", ".join(missing)
+            )
+        env.update(identity_values)
 
     if params.skill_space_id:
         env["SKILL_SPACE_ID"] = params.skill_space_id

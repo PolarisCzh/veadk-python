@@ -277,6 +277,32 @@ _MPA_INSTANCE_ID_TAG = "veadk:mpa-instance-id"
 _RUNTIME_ENVIRONMENT_ID_ENV = "VEADK_STUDIO_ENVIRONMENT_ID"
 _RUNTIME_ENVIRONMENT_VERSION_ENV = "VEADK_STUDIO_ENVIRONMENT_VERSION_ID"
 _DEFAULT_RUNTIME_ENVIRONMENT = "default"
+
+
+def _build_mpa_identity_runtime_env(
+    *,
+    user_pool_name: str,
+    user_pool_client_name: str,
+    oauth2_redirect_uri: str,
+) -> dict[str, str]:
+    """Build the explicit mpa-agent identity environment from Studio SSO."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    pool_name = user_pool_name.strip()
+    client_name = user_pool_client_name.strip()
+    parsed = urlsplit(oauth2_redirect_uri.strip())
+    if not pool_name or not client_name or not parsed.scheme or not parsed.netloc:
+        raise ValueError("Studio MPA identity configuration is incomplete")
+    return {
+        "IDENTITY_STARTUP_ENABLED": "true",
+        "MPA_USER_POOL_NAME": pool_name,
+        "MPA_USER_POOL_CLIENT_NAME": client_name,
+        "IDENTITY_CALLBACK_URL": urlunsplit(
+            (parsed.scheme, parsed.netloc, "/oauth/callback", "", "")
+        ),
+    }
+
+
 _STUDIO_STORAGE_ENV_KEYS = (
     "VEADK_STUDIO_TOS_BUCKET",
     "VEADK_STUDIO_TOS_REGION",
@@ -6554,6 +6580,30 @@ def _run_frontend_server(
                 current_client_uid = str(user_pool_client[0] or "").strip()
         return current_pool_uid, current_client_uid
 
+    def _mpa_runtime_identity_env() -> dict[str, str]:
+        """Resolve the Studio Identity resources into mpa-agent env names."""
+        pool_name = str(oauth2_user_pool or "").strip()
+        client_name = str(oauth2_user_pool_client or "").strip()
+        if not pool_name or not client_name:
+            identity_client = _identity_client()
+            pool_uid, client_uid = _current_studio_identity_ids(identity_client)
+            if not pool_uid or not client_uid:
+                raise RuntimeError("Studio UserPool and client are not configured")
+            resolved_pool_name, resolved_client_name = (
+                identity_client.get_user_pool_resource_names(pool_uid, client_uid)
+            )
+            pool_name = pool_name or resolved_pool_name
+            client_name = client_name or resolved_client_name
+
+        redirect_uri = str(
+            oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
+        ).strip()
+        return _build_mpa_identity_runtime_env(
+            user_pool_name=pool_name,
+            user_pool_client_name=client_name,
+            oauth2_redirect_uri=redirect_uri,
+        )
+
     def _user_pool_runtime_authentication(
         authentication: Any,
     ) -> dict[str, Any]:
@@ -7913,6 +7963,8 @@ def _run_frontend_server(
             runtime_envs[k] = v
         if mpa_instance_id_for_deploy:
             runtime_envs["MPA_AGENT_ID"] = mpa_instance_id_for_deploy
+            if oauth2_user_pool or oauth2_user_pool_uid:
+                runtime_envs.update(_mpa_runtime_identity_env())
         if source_preserving_requested:
             if source_preserving_draft is None:
                 raise HTTPException(
