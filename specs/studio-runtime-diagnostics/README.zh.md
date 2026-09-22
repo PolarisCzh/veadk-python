@@ -47,7 +47,7 @@
 
 - `CON-9`（已实现）：探测为 `a2a-default` 的 Runtime 应用通过 A2A 桥接创建/列表/读取/删除/运行会话，并跳过原生执行配置前置查询，不受 MPA 类型/实例信息影响。其他 MPA 应用保留原生 Profile/session/run/SSE 行为，普通 ADK 应用不变。错误和取消不切换协议。不涉及会话迁移、鉴权或持久化变更。参见 [A2A 会话路由](../../prd-spec/bugfixes/studio-session-protocol/2026-09-22-a2a-session-routing.zh.md) 和 `frontend/tests/runSseAbort.test.mjs`。
 
-- `CON-10`（已实现）：显式 MPA A2A 转录模式合并相邻匹配/扩展的外层完整推理快照，并按一条用户请求判断空回复提示。保留 partial 增量及 sandbox 事件；真正空的已结束请求保留一次提示。通用 ADK/A2A 和原生 MPA 的默认行为不变。参见 [MPA A2A 推理](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-a2a-reasoning.zh.md)。 MPA 沙箱完整事件不含权威推理文本时，在替换答案预览的同时保留临时预览区的 thinking 块，避免最终答案到达后丢失不同的沙箱推理；权威推理快照仍采用替换语义。 显式 MPA A2A 桥接模式按来源归一化外层多 part 推理快照，并与沙箱调用阶段隔离。追加元数据 `reasoningSegmentId` 让迟于 tool.call 的沙箱推理尾部仍属于原块；工具结果和答案增量分隔阶段。通用/默认解码不变。
+- `CON-10`（已实现）：显式 MPA A2A 转录模式合并相邻匹配/扩展的外层完整推理快照，并按一条用户请求判断空回复提示。保留 partial 增量及 sandbox 事件；真正空的已结束请求保留一次提示。通用 ADK/A2A 和原生 MPA 的默认行为不变。参见 [MPA A2A 推理](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-a2a-reasoning.zh.md)。 MPA 外层及沙箱完整事件不含权威推理文本时，在替换答案预览的同时保留临时预览区的 thinking 块，避免最终答案到达后丢失不同的外层及沙箱推理，包括不调用沙箱的直接回答；权威推理快照仍采用替换语义。 显式 MPA A2A 桥接模式按来源归一化外层多 part 推理快照，并与沙箱调用阶段隔离。追加元数据 `reasoningSegmentId` 让迟于 tool.call 的沙箱推理尾部仍属于原块；工具结果和答案增量分隔阶段。通用/默认解码不变。 MPA 完整/替换 artifact 的推理 part 必须保留精确空白拼接后再比较快照；仅追加分片仍按增量处理。合并不得跨越非推理 part。
 
 - `CON-11`（已实现）：MPA A2A 将相邻助手片段显示为一个回复和一套底栏，按来源统计本轮用量，使用最后可见答案的反馈身份及最新会话轨迹截止时间。原 turn 和通用智能体行为不变。参见[回复合并](../../prd-spec/features/mpa-response-grouping/2026-09-22-mpa-response-grouping.zh.md)。
 

@@ -701,9 +701,9 @@ export function applyEvent(acc: Acc, ev: AdkEvent, options: { mpaA2a?: boolean }
 
   // Consolidated / final event: drop the live preview and append authoritative
   // content (merging consecutive same-kind text parts into one block).
-  // Sandbox finals contain the answer, not a snapshot of earlier reasoning.
+  // MPA finals can contain only the answer, without earlier outer/worker reasoning.
   // Keep that reasoning unless this event explicitly supplies its replacement.
-  const preservedThinking = options.mpaA2a && isMpaSandboxEvent(ev) &&
+  const preservedThinking = options.mpaA2a &&
     !parts.some((part) => part.thought && visiblePartText(part))
     ? blocks.slice(liveStart).filter((block) => block.kind === "thinking")
     : [];
