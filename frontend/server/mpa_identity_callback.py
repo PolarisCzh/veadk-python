@@ -318,9 +318,9 @@ def _invalid_request() -> JSONResponse:
     )
 
 
-def _internal_error() -> JSONResponse:
+def _internal_error(error: str, stage: str) -> JSONResponse:
     return JSONResponse(
-        {"code": 5000, "message": "", "error": "MPA authorization failed"},
+        {"code": 5000, "message": "", "error": error, "stage": stage},
         status_code=502,
         headers=_SECURITY_HEADERS,
     )
@@ -389,17 +389,21 @@ def mount_mpa_identity_callback(
             timeout=httpx.Timeout(CALLBACK_TIMEOUT_SECONDS),
             follow_redirects=False,
         )
+        stage = "resolve_userpool_callback"
         try:
             hosted_callback_url = await hosted_callback_resolver(
                 relay_state.provider_id
             )
+            stage = "relay_userpool_callback"
             relayed_code, relayed_state = await _relay_user_pool_callback(
                 client,
                 hosted_callback_url,
                 code,
                 state,
             )
+            stage = "resolve_runtime"
             credentials = await runtime_credentials_resolver(relay_state.target)
+            stage = "runtime_callback"
             result = await _call_runtime_callback(
                 client,
                 credentials,
@@ -408,13 +412,21 @@ def mount_mpa_identity_callback(
             )
             response = _runtime_result_response(result)
         except Exception as callback_error:  # noqa: BLE001 - sanitize route boundary
+            safe_error = (
+                str(callback_error)
+                if isinstance(callback_error, MpaIdentityCallbackError)
+                else type(callback_error).__name__
+            )
             logger.warning(
-                "MPA identity callback failed error_type=%s request_id=%s target=%s",
+                "MPA identity callback failed stage=%s error=%s "
+                "error_type=%s request_id=%s target=%s",
+                stage,
+                safe_error,
                 type(callback_error).__name__,
                 relay_state.request_id,
                 relay_state.target.instance_id,
             )
-            response = _internal_error()
+            response = _internal_error(safe_error, stage)
         finally:
             if owned_client:
                 await client.aclose()

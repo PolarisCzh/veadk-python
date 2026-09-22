@@ -181,6 +181,12 @@ def _app(
     refreshed: bool = False,
     runtime_payload: dict[str, object] | None = None,
     runtime_status: int = 200,
+    user_pool_location: str | None = (
+        "https://studio.example.com/oauth/callback"
+        "?code=user-pool-code&state=user-pool-state"
+    ),
+    hosted_callback_error: Exception | None = None,
+    runtime_credentials_error: Exception | None = None,
 ):
     requests: list[httpx.Request] = []
 
@@ -188,15 +194,9 @@ def _app(
         requests.append(request)
         if request.url.host == "pool.example.com":
             assert request.url.path == "/login/generic_oauth/callback"
-            return httpx.Response(
-                302,
-                headers={
-                    "location": (
-                        "https://studio.example.com/oauth/callback"
-                        "?code=user-pool-code&state=user-pool-state"
-                    )
-                },
-            )
+            if user_pool_location is None:
+                return httpx.Response(200)
+            return httpx.Response(302, headers={"location": user_pool_location})
         return httpx.Response(
             runtime_status,
             json=runtime_payload or {"code": 0, "message": "authorized", "error": ""},
@@ -210,10 +210,14 @@ def _app(
 
     async def hosted_callback(provider_id: str) -> str:
         assert provider_id == "provider-1"
+        if hosted_callback_error is not None:
+            raise hosted_callback_error
         return "https://pool.example.com/login/generic_oauth/callback"
 
     async def runtime_credentials(target: MpaCallbackTarget) -> MpaRuntimeCredentials:
         assert target == MpaCallbackTarget("mi-agent1")
+        if runtime_credentials_error is not None:
+            raise runtime_credentials_error
         return MpaRuntimeCredentials(
             endpoint_origin="https://runtime.example.com",
             api_key="runtime-api-key",
@@ -359,9 +363,78 @@ def test_callback_rejects_runtime_redirect_without_leaking_credentials() -> None
     assert response.json() == {
         "code": 5000,
         "message": "",
-        "error": "MPA authorization failed",
+        "error": "Runtime callback redirected unexpectedly",
+        "stage": "runtime_callback",
     }
     assert len(requests) == 2
+
+
+def test_callback_exposes_user_pool_relay_failure_stage() -> None:
+    app, _, requests = _app(
+        user_pool_location=(
+            "https://pool.example.com/login/consent?authRequestId=request-1"
+        )
+    )
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        response = client.get(
+            "/oauth/callback",
+            params={"code": "idp-code", "state": _relay_state()},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "code": 5000,
+        "message": "",
+        "error": "UserPool relay did not return code and state",
+        "stage": "relay_userpool_callback",
+    }
+    assert len(requests) == 1
+
+
+def test_callback_exposes_runtime_resolution_failure_stage() -> None:
+    app, _, requests = _app(
+        runtime_credentials_error=MpaIdentityCallbackError("MPA Runtime not found")
+    )
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        response = client.get(
+            "/oauth/callback",
+            params={"code": "idp-code", "state": _relay_state()},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "code": 5000,
+        "message": "",
+        "error": "MPA Runtime not found",
+        "stage": "resolve_runtime",
+    }
+    assert len(requests) == 1
+
+
+def test_callback_sanitizes_unexpected_error_and_logs_stage(caplog) -> None:
+    app, _, requests = _app(
+        hosted_callback_error=RuntimeError("must-not-leak-idp-code")
+    )
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        response = client.get(
+            "/oauth/callback",
+            params={"code": "idp-code", "state": _relay_state()},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "code": 5000,
+        "message": "",
+        "error": "RuntimeError",
+        "stage": "resolve_userpool_callback",
+    }
+    assert "stage=resolve_userpool_callback error=RuntimeError" in caplog.text
+    assert "request_id=request-1 target=mi-agent1" in caplog.text
+    assert "must-not-leak-idp-code" not in caplog.text
+    assert requests == []
 
 
 @pytest.mark.asyncio
