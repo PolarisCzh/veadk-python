@@ -2,9 +2,9 @@
 
 - **Component ID:** `studio-tool-activity`
 - **Status:** active
-- **Revision date:** 2026-09-12
+- **Revision date:** 2026-09-22
 - **Chinese counterpart:** [README.zh.md](README.zh.md)
-- **Related PRD:** [Studio Tool Activity Visualization Design](../../prd-spec/features/studio-tool-activity-visualization/2026-09-12-studio-tool-activity-visualization-design.md)
+- **Related PRDs:** [Studio Tool Activity Visualization Design](../../prd-spec/features/studio-tool-activity-visualization/2026-09-12-studio-tool-activity-visualization-design.md) and [Follow-up preservation](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-preserve-followup-content.md)
 - **Owned implementation:** `frontend/src/blocks.ts`, `frontend/src/ui/Blocks.tsx`, and `frontend/src/ui/tool-activity/`
 - **Primary tests:** `frontend/tests/toolActivityModel.test.mjs`, `frontend/tests/toolBlockDefaultOpen.test.mjs`, and `frontend/tests/codexSandboxProgress.test.mjs`
 
@@ -49,6 +49,7 @@ The maintained categories are `command`, `read`, `search`, `file-change`, `mcp`,
 
 When `delegate_to_codex_sandbox` has structured child activity, its child blocks render at the current transcript level under one lightweight `Codex Sandbox` source marker. The outer tool card is retained while no child activity exists. The final assistant answer remains outside the tool activity sequence.
 
+
 ### `CON-6` — Safe exploration grouping
 
 Only adjacent, completed, successful `read` and `search` activities with the same source may form an exploration group. Commands, file changes, MCP, authorization, failures, running activity, source changes, non-tool blocks, and final text terminate the group. Children remain ordered and individually inspectable.
@@ -67,6 +68,10 @@ Raw data is closed by default and formatted only after disclosure. Sensitive key
 
 An A2A virtual session that persists only final text cannot reconstruct transient tool activity; Studio must preserve the final answer and must not fabricate missing history. This is a transport persistence limitation, not permission to submit the task again.
 
+The MPA `sandbox_task` response with `finalAlreadyEmitted: true` closes the parent activity without advancing the live-preview boundary. A later sandbox consolidated final replaces that preview; transport finish without a final retains it. This rule is independent of the `delegate_to_codex_sandbox` activity format.
+
+For MPA through A2A, the backend projects the sandbox final and suppresses subsequent outer answer mirrors under [Runtime diagnostics CON-8](../studio-runtime-diagnostics/README.md). The native-session wrapper rule above does not perform that A2A normalization.
+
 ### `CON-10` — Accessibility and responsive behavior
 
 Interactive disclosure uses native buttons, `aria-expanded`, visible focus, textual status, and at least a 44px effective target. Collapsed content is `aria-hidden` and inert. Secondary summaries hide before titles or state at narrow widths. Motion uses bounded transitions and is disabled under `prefers-reduced-motion`.
@@ -79,6 +84,7 @@ queued -> running -> completed
 ```
 
 Output deltas may repeat while running. A terminal event owns final status and authoritative output. Concurrent activities are isolated by `callId`; projector state is isolated per active assistant turn and session. Session switching reconstructs or selects that session's own turns and must not share component-local disclosure state.
+
 
 ## 5. Security and Isolation
 
@@ -114,3 +120,5 @@ Tool payloads are untrusted display data. The component does not use raw HTML in
 - **2026-09-12:** A2A text parts marked `adk_thought` are projected as Studio thinking events. Reasoning and answer cumulative-delta state is isolated so one stream cannot suppress or corrupt the other.
 - **2026-09-12:** When an A2A stream closes after answer deltas without explicit final text, the bridge emits the accumulated answer once as a completed Studio event. Reasoning-only streams remain incomplete.
 - **2026-09-12:** Parts appended to the same A2A artifact receive distinct projection event IDs; Studio deduplication must not discard later reasoning parts or the final answer.
+
+- **2026-09-22 correction:** General Codex tool activity retains commentary, reasoning and subsequent outer text under its original contract. No substring or final-ownership filter applies. MPA A2A exact answer deduplication belongs to Runtime diagnostics CON-8/CON-11; distinct text and non-text activity remain visible.

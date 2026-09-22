@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
-import json
 import codecs
+import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
 _MAX_EVENT_TEXT_CHARS = 64_000
 
 
+@dataclass
+class _ReasoningSegment:
+    text: str = ""
+    deltas: int = 0
+    index: int = 0
+
+
 class A2AStreamDecoder:
-    def __init__(self) -> None:
+    def __init__(self, *, mpa_a2a: bool = False) -> None:
+        self._mpa_a2a = mpa_a2a
+        self._mpa_reasoning: dict[tuple[str, str, str], _ReasoningSegment] = {}
         self._buffer = ""
         self._utf8_decoder = codecs.getincrementaldecoder("utf-8")()
         self._seen_event_ids: set[tuple[str, str]] = set()
@@ -22,6 +32,8 @@ class A2AStreamDecoder:
         self._heartbeat_states: set[tuple[str, str]] = set()
         self._usage_snapshots: dict[str, dict[str, int]] = {}
         self._terminal_state = ""
+        self._sandbox_final_answers: dict[str, set[str]] = {}
+        self._projected_sandbox_ids: set[tuple[str, str]] = set()
 
     def feed(self, chunk: str | bytes) -> list[dict[str, Any]]:
         text = (
@@ -60,25 +72,20 @@ class A2AStreamDecoder:
 
     def project(self, event: Any, *, author: str) -> list[dict[str, Any]]:
         """Project one A2A event and suppress cumulative partial replays."""
-        projected = a2a_event_to_studio_events(event, author=author)
+        projected = a2a_event_to_studio_events(
+            _coalesce_mpa_thought_parts(event) if self._mpa_a2a else event,
+            author=author,
+        )
         task_id = (
             str(event.get("taskId") or event.get("id") or "unknown")
             if isinstance(event, Mapping)
             else "unknown"
         )
         metadata = event.get("metadata") if isinstance(event, Mapping) else None
-        if (
-            isinstance(event, Mapping)
-            and event.get("kind") == "status-update"
-            and event.get("final") is True
+        if isinstance(event, Mapping) and (
+            (event.get("kind") == "status-update" and event.get("final") is True)
+            or event.get("kind") == "task"
         ):
-            status = event.get("status")
-            self._terminal_state = (
-                str(status.get("state") or "").lower()
-                if isinstance(status, Mapping)
-                else ""
-            )
-        elif isinstance(event, Mapping) and event.get("kind") == "task":
             status = event.get("status")
             self._terminal_state = (
                 str(status.get("state") or "").lower()
@@ -103,6 +110,53 @@ class A2AStreamDecoder:
                 projected.append(usage_event)
         output: list[dict[str, Any]] = []
         for item in projected:
+            item_metadata = item.get("customMetadata")
+            is_sandbox = (
+                isinstance(item_metadata, Mapping)
+                and item_metadata.get("source") == "sandbox"
+            )
+            parts = item.get("content", {}).get("parts", [])
+            if is_sandbox and isinstance(item_metadata, Mapping):
+                source_id = str(item_metadata.get("sourceEventId") or "")
+                if source_id and task_id != "unknown":
+                    sandbox_key = (task_id, source_id)
+                    if sandbox_key in self._projected_sandbox_ids:
+                        continue
+                    self._projected_sandbox_ids.add(sandbox_key)
+                if (
+                    item_metadata.get("eventType") == "invocation.completed"
+                    and task_id != "unknown"
+                ):
+                    answers = self._sandbox_final_answers.setdefault(task_id, set())
+                    answers.update(
+                        str(part["text"]).strip()
+                        for part in parts
+                        if isinstance(part, Mapping) and part.get("text")
+                    )
+            elif (
+                task_id in self._sandbox_final_answers and item.get("partial") is False
+            ):
+                # Complete exact mirrors may be omitted. Deltas and extended
+                # explanations stay intact: a matching prefix is not a duplicate.
+                answers = self._sandbox_final_answers[task_id]
+                retained = [
+                    part
+                    for part in parts
+                    if not (
+                        isinstance(part, Mapping)
+                        and part.get("thought") is not True
+                        and isinstance(part.get("text"), str)
+                        and str(part["text"]).strip() in answers
+                    )
+                ]
+                if len(retained) != len(parts):
+                    item = {**item, "content": {**item["content"], "parts": retained}}
+                    if (
+                        not retained
+                        and not item.get("usageMetadata")
+                        and not item.get("actions")
+                    ):
+                        continue
             event_id = str(item.get("id") or uuid4())
             occurrence = self._projected_event_id_counts.get(event_id, 0)
             self._projected_event_id_counts[event_id] = occurrence + 1
@@ -141,6 +195,16 @@ class A2AStreamDecoder:
                 if not any(delta.values()):
                     continue
                 item = {**item, "usageMetadata": delta}
+            if self._mpa_a2a:
+                item = self._normalize_mpa_reasoning(item, task_id, cumulative_snapshot)
+                if item is None:
+                    continue
+                if any(
+                    p.get("thought") is True
+                    for p in item.get("content", {}).get("parts", [])
+                ):
+                    output.append(item)
+                    continue
             if item.get("partial") is not True:
                 parts = item.get("content", {}).get("parts", [])
                 if any(
@@ -231,6 +295,70 @@ class A2AStreamDecoder:
                 self._partial_text[stream] += text
             output.append(item)
         return output
+
+    def _normalize_mpa_reasoning(
+        self, item: dict[str, Any], task_id: str, cumulative: bool
+    ) -> dict[str, Any] | None:
+        metadata = item.get("customMetadata", {})
+        sandbox = metadata.get("source") == "sandbox"
+        key = (
+            task_id,
+            "sandbox" if sandbox else "outer",
+            str(item.get("invocationId") or ""),
+        )
+        state = self._mpa_reasoning.setdefault(key, _ReasoningSegment())
+        if sandbox and metadata.get("eventType") in {
+            "tool.result",
+            "tool.error",
+            "message.delta",
+            "invocation.completed",
+        }:
+            if state.text:
+                state.text = ""
+                state.deltas = 0
+                state.index += 1
+        parts = item.get("content", {}).get("parts", [])
+        if len(parts) != 1 or parts[0].get("thought") is not True:
+            return item
+        text = str(parts[0].get("text") or "")
+        snapshot = (
+            cumulative
+            or metadata.get("reasoningSnapshot") is True
+            or (
+                item.get("partial") is False
+                and metadata.get("reasoningSnapshot") is not False
+            )
+            or (
+                sandbox
+                and state.deltas > 1
+                and bool(state.text)
+                and text.startswith(state.text)
+            )
+        )
+        if snapshot and state.text and text.startswith(state.text):
+            suffix = text[len(state.text) :]
+            state.text = text
+            text = suffix
+        elif snapshot:
+            if state.text:
+                state.index += 1
+            state.text = text
+            state.deltas = 0
+        else:
+            state.text += text
+            state.deltas += 1
+        if not text:
+            return None
+        return {
+            **item,
+            # Snapshot prefixes have already been emitted as deltas.
+            "partial": True,
+            "content": {**item["content"], "parts": [{**parts[0], "text": text}]},
+            "customMetadata": {
+                **metadata,
+                "reasoningSegmentId": json.dumps([*key, state.index]),
+            },
+        }
 
     def _usage_event(
         self,
@@ -366,6 +494,78 @@ def a2a_event_to_studio_events(event: Any, *, author: str) -> list[dict[str, Any
     )
 
 
+def _coalesce_mpa_thought_parts(event: Any) -> Any:
+    """Normalize adjacent thought parts before splitting a message into events."""
+    if not isinstance(event, Mapping):
+        return event
+
+    def coalesce(container: Any, *, snapshot: bool | None) -> Any:
+        if not isinstance(container, Mapping):
+            return container
+        parts: list[Any] = []
+        for part in container.get("parts") or []:
+            metadata = part.get("metadata") if isinstance(part, Mapping) else None
+            previous_metadata = (
+                parts[-1].get("metadata")
+                if parts and isinstance(parts[-1], Mapping)
+                else None
+            )
+            if isinstance(metadata, Mapping) and metadata.get("adk_thought") is True:
+                if snapshot is not None:
+                    part = {
+                        **part,
+                        "metadata": {**metadata, "reasoningSnapshot": snapshot},
+                    }
+                if (
+                    isinstance(previous_metadata, Mapping)
+                    and previous_metadata.get("adk_thought") is True
+                ):
+                    previous = parts[-1]
+                    parts[-1] = {
+                        **previous,
+                        "text": str(previous.get("text") or "")
+                        + str(part.get("text") or ""),
+                        "metadata": {
+                            **previous_metadata,
+                            "reasoningSnapshot": snapshot
+                            if snapshot is not None
+                            else True,
+                        },
+                    }
+                    continue
+            parts.append(part)
+        return {**container, "parts": parts}
+
+    kind = event.get("kind")
+    if kind == "status-update":
+        status = event.get("status")
+        if not isinstance(status, Mapping):
+            return event
+        return {
+            **event,
+            "status": {
+                **status,
+                "message": coalesce(status.get("message"), snapshot=None),
+            },
+        }
+    if kind == "artifact-update":
+        return {
+            **event,
+            "artifact": coalesce(
+                event.get("artifact"), snapshot=event.get("append") is not True
+            ),
+        }
+    if kind == "task":
+        return {
+            **event,
+            "artifacts": [
+                coalesce(artifact, snapshot=True)
+                for artifact in event.get("artifacts") or []
+            ],
+        }
+    return event
+
+
 def _message_to_partial_events(
     message: Mapping[str, Any], *, author: str
 ) -> list[dict[str, Any]]:
@@ -389,6 +589,12 @@ def _message_to_partial_events(
                 custom_metadata={
                     "thoughtKind": "reasoning",
                     "projectionSource": "a2a-status",
+                    **(
+                        {"reasoningSnapshot": True}
+                        if isinstance(metadata, Mapping)
+                        and metadata.get("reasoningSnapshot") is True
+                        else {}
+                    ),
                 }
                 if thought
                 else None,
@@ -408,11 +614,15 @@ def _artifact_to_studio_events(
         if not isinstance(part, Mapping):
             continue
         metadata = part.get("metadata")
-        text = str(part.get("text") or "").strip()
+        thought = isinstance(metadata, Mapping) and metadata.get("adk_thought") is True
+        normalized_thought = (
+            thought
+            and isinstance(metadata, Mapping)
+            and "reasoningSnapshot" in metadata
+        )
+        raw_text = str(part.get("text") or "")
+        text = raw_text if normalized_thought else raw_text.strip()
         if text:
-            thought = (
-                isinstance(metadata, Mapping) and metadata.get("adk_thought") is True
-            )
             events.append(
                 _text_event(
                     text,
@@ -424,6 +634,11 @@ def _artifact_to_studio_events(
                     custom_metadata={
                         "thoughtKind": "reasoning",
                         "projectionSource": "a2a-artifact",
+                        **(
+                            {"reasoningSnapshot": metadata["reasoningSnapshot"]}
+                            if normalized_thought and isinstance(metadata, Mapping)
+                            else {}
+                        ),
                     }
                     if thought
                     else None,
@@ -482,6 +697,24 @@ def _sandbox_event(data: Mapping[str, Any], *, author: str) -> dict[str, Any] | 
             ),
         },
     }
+    if event_type == "invocation.completed":
+        text = str(
+            payload.get("finalMessage")
+            or payload.get("text")
+            or payload.get("message")
+            or ""
+        )
+        if not text.strip():
+            return None
+        return _text_event(
+            text,
+            author=author,
+            event_id=event_id,
+            invocation_id=invocation_id,
+            partial=False,
+            turn_complete=True,
+            custom_metadata=common["customMetadata"],
+        )
     if event_type == "message.delta":
         text = str(payload.get("text") or "")[:_MAX_EVENT_TEXT_CHARS]
         return (

@@ -11080,6 +11080,7 @@ def _run_frontend_server(
         card: Mapping[str, Any],
         headers: dict[str, str],
         payload: Mapping[str, Any],
+        mpa_a2a: bool = False,
     ) -> AsyncIterator[bytes]:
         new_message = payload.get("new_message")
         if not isinstance(new_message, Mapping):
@@ -11165,7 +11166,7 @@ def _run_frontend_server(
                         + "\n\n"
                     ).encode("utf-8")
                     return
-                decoder = A2AStreamDecoder()
+                decoder = A2AStreamDecoder(mpa_a2a=mpa_a2a)
                 received_event = False
                 fallback_to_blocking = False
                 async for chunk in upstream.aiter_raw():
@@ -12597,6 +12598,7 @@ def _run_frontend_server(
                     card=a2a_card,
                     headers=headers,
                     payload=run_sse_payload,
+                    mpa_a2a=is_mpa,
                 ),
                 status_code=200,
                 media_type="text/event-stream",
