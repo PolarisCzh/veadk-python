@@ -41,7 +41,6 @@ _SECURITY_HEADERS = {
 @dataclass(frozen=True)
 class MpaCallbackTarget:
     instance_id: str
-    is_debug: bool
 
 
 @dataclass(frozen=True)
@@ -85,14 +84,7 @@ def select_mpa_runtime(
             str(getattr(item, "key", "") or ""): str(getattr(item, "value", "") or "")
             for item in (getattr(runtime, "envs", None) or [])
         }
-        is_debug = envs.get("MPA_IS_DEBUG_RUNTIME", "false").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-        }
-        if envs.get("MPA_AGENT_ID", "").strip() == target.instance_id and (
-            is_debug == target.is_debug
-        ):
+        if envs.get("MPA_AGENT_ID", "").strip() == target.instance_id:
             matches.append((region, runtime))
     if len(matches) != 1:
         reason = "not found" if not matches else "not unique"
@@ -134,19 +126,17 @@ def parse_identity_relay_state(value: str) -> IdentityRelayState | None:
     if inner is None:
         return None
     target = inner.get("target")
-    is_debug = inner.get("is_debug")
     if (
         not isinstance(target, str)
         or not target.startswith("mi-")
         or len(target) <= len("mi-")
-        or not isinstance(is_debug, bool)
     ):
         return None
     return IdentityRelayState(
         request_id=request_id.strip(),
         provider_id=provider_id.strip(),
         request_state=request_state.strip(),
-        target=MpaCallbackTarget(target.strip(), is_debug),
+        target=MpaCallbackTarget(target.strip()),
     )
 
 

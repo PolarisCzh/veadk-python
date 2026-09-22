@@ -32,25 +32,28 @@ def _state(payload: dict[str, object]) -> str:
     return encoded.rstrip("=")
 
 
-def _relay_state(*, target: str = "mi-agent1", is_debug: bool = False) -> str:
+def _relay_state(*, target: str = "mi-agent1", **target_metadata: object) -> str:
     return _state(
         {
             "request_id": "request-1",
             "provider_id": "provider-1",
             "request_state": _state(
-                {"target": target, "is_debug": is_debug, "type": "esa"}
+                {"target": target, "type": "esa", **target_metadata}
             ),
         }
     )
 
 
-def test_parse_identity_relay_state_accepts_strict_mpa_target() -> None:
-    parsed = parse_identity_relay_state(_relay_state(is_debug=True))
+@pytest.mark.parametrize("target_metadata", [{}, {"is_debug": "ignored"}])
+def test_parse_identity_relay_state_accepts_mpa_target(
+    target_metadata: dict[str, str],
+) -> None:
+    parsed = parse_identity_relay_state(_relay_state(**target_metadata))
 
     assert parsed is not None
     assert parsed.request_id == "request-1"
     assert parsed.provider_id == "provider-1"
-    assert parsed.target == MpaCallbackTarget("mi-agent1", True)
+    assert parsed.target == MpaCallbackTarget("mi-agent1")
 
 
 @pytest.mark.parametrize(
@@ -71,13 +74,6 @@ def test_parse_identity_relay_state_accepts_strict_mpa_target() -> None:
                 "request_id": "request-1",
                 "provider_id": "provider-1",
                 "request_state": _state({"target": "ci-claw1", "is_debug": False}),
-            }
-        ),
-        _state(
-            {
-                "request_id": "request-1",
-                "provider_id": "provider-1",
-                "request_state": _state({"target": "mi-agent1", "is_debug": "false"}),
             }
         ),
     ],
@@ -123,14 +119,8 @@ def test_build_user_pool_hosted_callback_url_rejects_unsafe_values(
         build_user_pool_hosted_callback_url(issuer, connection_type)
 
 
-def test_select_mpa_runtime_matches_agent_and_debug_mode() -> None:
-    formal = SimpleNamespace(
-        envs=[
-            SimpleNamespace(key="MPA_AGENT_ID", value="mi-agent1"),
-            SimpleNamespace(key="MPA_IS_DEBUG_RUNTIME", value="false"),
-        ]
-    )
-    debug = SimpleNamespace(
+def test_select_mpa_runtime_matches_agent_id_only() -> None:
+    runtime = SimpleNamespace(
         envs=[
             SimpleNamespace(key="MPA_AGENT_ID", value="mi-agent1"),
             SimpleNamespace(key="MPA_IS_DEBUG_RUNTIME", value="true"),
@@ -138,15 +128,15 @@ def test_select_mpa_runtime_matches_agent_and_debug_mode() -> None:
     )
 
     assert select_mpa_runtime(
-        [("cn-beijing", formal), ("cn-shanghai", debug)],
-        MpaCallbackTarget("mi-agent1", True),
-    ) == ("cn-shanghai", debug)
+        [("cn-beijing", runtime)],
+        MpaCallbackTarget("mi-agent1"),
+    ) == ("cn-beijing", runtime)
 
 
 @pytest.mark.parametrize("candidates", [[], [("cn-beijing", object())]])
 def test_select_mpa_runtime_rejects_missing_match(candidates) -> None:
     with pytest.raises(ValueError, match="not found"):
-        select_mpa_runtime(candidates, MpaCallbackTarget("mi-agent1", False))
+        select_mpa_runtime(candidates, MpaCallbackTarget("mi-agent1"))
 
 
 def test_select_mpa_runtime_rejects_duplicate_match() -> None:
@@ -156,7 +146,7 @@ def test_select_mpa_runtime_rejects_duplicate_match() -> None:
     with pytest.raises(ValueError, match="not unique"):
         select_mpa_runtime(
             [("cn-beijing", runtime), ("cn-shanghai", runtime)],
-            MpaCallbackTarget("mi-agent1", False),
+            MpaCallbackTarget("mi-agent1"),
         )
 
 
@@ -223,7 +213,7 @@ def _app(
         return "https://pool.example.com/login/generic_oauth/callback"
 
     async def runtime_credentials(target: MpaCallbackTarget) -> MpaRuntimeCredentials:
-        assert target == MpaCallbackTarget("mi-agent1", False)
+        assert target == MpaCallbackTarget("mi-agent1")
         return MpaRuntimeCredentials(
             endpoint_origin="https://runtime.example.com",
             api_key="runtime-api-key",
@@ -411,7 +401,9 @@ def test_runtime_payload_rejects_invalid_responses(response: httpx.Response) -> 
 
 @pytest.mark.asyncio
 async def test_runtime_callback_requires_api_key() -> None:
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: None))
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500))
+    )
     try:
         with pytest.raises(MpaIdentityCallbackError, match="key authentication"):
             await _call_runtime_callback(
@@ -426,7 +418,9 @@ async def test_runtime_callback_requires_api_key() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_callback_rejects_endpoint_paths() -> None:
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: None))
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500))
+    )
     try:
         with pytest.raises(MpaIdentityCallbackError, match="Runtime endpoint"):
             await _call_runtime_callback(
@@ -451,7 +445,7 @@ def test_runtime_nonstandard_error_is_preserved_as_json() -> None:
     )
 
     assert response.status_code == 400
-    assert json.loads(response.body) == {
+    assert json.loads(bytes(response.body)) == {
         "code": 4004,
         "message": "",
         "error": "token exchange failed",
