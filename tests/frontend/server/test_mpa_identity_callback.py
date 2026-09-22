@@ -46,11 +46,8 @@ def _runtime_state(*, target: str = "mi-agent1") -> str:
     return _state({"target": target, "type": "esa", "nonce": "nonce-1"})
 
 
-@pytest.mark.parametrize("target_metadata", [{}, {"is_debug": "ignored"}])
-def test_parse_identity_relay_state_accepts_mpa_target(
-    target_metadata: dict[str, str],
-) -> None:
-    parsed = parse_identity_relay_state(_relay_state(**target_metadata))
+def test_parse_identity_relay_state_accepts_mpa_target() -> None:
+    parsed = parse_identity_relay_state(_relay_state())
 
     assert parsed is not None
     assert parsed.request_id == "request-1"
@@ -322,13 +319,12 @@ def test_callback_rejects_runtime_redirect_without_leaking_credentials() -> None
     assert response.json() == {
         "code": 5000,
         "message": "",
-        "error": "Runtime callback redirected unexpectedly",
-        "stage": "runtime_callback",
+        "error": "MPA authorization failed",
     }
     assert len(requests) == 1
 
 
-def test_callback_exposes_runtime_resolution_failure_stage() -> None:
+def test_callback_hides_runtime_resolution_details() -> None:
     app, _, requests = _app(
         runtime_credentials_error=MpaIdentityCallbackError("MPA Runtime not found")
     )
@@ -343,13 +339,12 @@ def test_callback_exposes_runtime_resolution_failure_stage() -> None:
     assert response.json() == {
         "code": 5000,
         "message": "",
-        "error": "MPA Runtime not found",
-        "stage": "resolve_runtime",
+        "error": "MPA authorization failed",
     }
     assert requests == []
 
 
-def test_callback_sanitizes_unexpected_error_and_logs_stage(caplog) -> None:
+def test_callback_hides_unexpected_error_and_logs_stage(caplog) -> None:
     app, _, requests = _app(
         hosted_callback_error=RuntimeError("must-not-leak-idp-code")
     )
@@ -364,8 +359,7 @@ def test_callback_sanitizes_unexpected_error_and_logs_stage(caplog) -> None:
     assert response.json() == {
         "code": 5000,
         "message": "",
-        "error": "RuntimeError",
-        "stage": "resolve_userpool_callback",
+        "error": "MPA authorization failed",
     }
     assert "stage=resolve_userpool_callback error=RuntimeError" in caplog.text
     assert "request_id=request-1 target=mi-agent1" in caplog.text

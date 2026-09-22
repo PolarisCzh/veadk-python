@@ -977,8 +977,6 @@ class IdentityClient:
                 providers.append(
                     {
                         "uid": str(item.uid or ""),
-                        "name": str(item.name or ""),
-                        "provider": str(item.provider or ""),
                         "connection_type": str(item.connection_type or ""),
                         "enabled": bool(item.enabled),
                     }

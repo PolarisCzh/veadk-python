@@ -2436,15 +2436,11 @@ def test_list_identity_providers_returns_normalized_enabled_entries() -> None:
     assert identity_client.list_identity_providers("pool-id") == [
         {
             "uid": "provider-1",
-            "name": "feishu",
-            "provider": "feishu",
             "connection_type": "OAuth",
             "enabled": True,
         },
         {
             "uid": "provider-2",
-            "name": "disabled",
-            "provider": "oidc",
             "connection_type": "OIDC",
             "enabled": False,
         },

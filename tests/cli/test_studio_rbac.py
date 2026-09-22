@@ -837,12 +837,6 @@ def test_mpa_runtime_resolver_loads_runtime_details_before_matching(
         envs=[],
         tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")],
     )
-    unrelated_runtime_summary = SimpleNamespace(
-        runtime_id="runtime-unrelated",
-        envs=[],
-        tags=[SimpleNamespace(key="veadk:agent-type", value="veadk")],
-    )
-    empty_runtime_summary = SimpleNamespace(runtime_id="", envs=[], tags=[])
     runtime_detail = SimpleNamespace(
         runtime_id="runtime-1",
         envs=[SimpleNamespace(key="MPA_AGENT_ID", value="mi-agent1")],
@@ -866,24 +860,18 @@ def test_mpa_runtime_resolver_loads_runtime_details_before_matching(
             requests.append(("list", self.region))
             if mode["value"] == "duplicate":
                 return SimpleNamespace(
-                    agent_kit_runtimes=[runtime_detail, runtime_detail],
+                    agent_kit_runtimes=[runtime_summary, runtime_summary],
                     next_token="",
                 )
             return SimpleNamespace(
-                agent_kit_runtimes=[
-                    runtime_summary,
-                    unrelated_runtime_summary,
-                    empty_runtime_summary,
-                ],
+                agent_kit_runtimes=[runtime_summary],
                 next_token="",
             )
 
         def get_runtime(self, request: Any) -> SimpleNamespace:
             requests.append(("get", request.runtime_id))
-            if mode["value"] != "success":
+            if mode["value"] in {"missing", "failure"}:
                 raise RuntimeError("detail unavailable")
-            if request.runtime_id == "runtime-unrelated":
-                return SimpleNamespace(runtime_id=request.runtime_id, envs=[])
             return runtime_detail
 
     monkeypatch.setattr(
@@ -926,19 +914,6 @@ def test_mpa_runtime_resolver_loads_runtime_details_before_matching(
     assert credentials.endpoint_origin == "https://runtime.example.com"
     assert credentials.api_key == "runtime-api-key"
     assert requests == [("list", "cn-beijing"), ("get", "runtime-1")]
-
-    runtime_summary.tags = []
-    unrelated_runtime_summary.tags = []
-    requests.clear()
-    credentials = asyncio.run(
-        captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
-    )
-    assert credentials.endpoint_origin == "https://runtime.example.com"
-    assert requests[0] == ("list", "cn-beijing")
-    assert set(requests[1:]) == {
-        ("get", "runtime-1"),
-        ("get", "runtime-unrelated"),
-    }
 
     mode["value"] = "duplicate"
     with pytest.raises(MpaIdentityCallbackError, match="not unique"):

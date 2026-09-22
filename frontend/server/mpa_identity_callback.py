@@ -47,7 +47,6 @@ class MpaCallbackTarget:
 class IdentityRelayState:
     request_id: str
     provider_id: str
-    request_state: str
     target: MpaCallbackTarget
 
 
@@ -128,7 +127,6 @@ def parse_identity_relay_state(value: str) -> IdentityRelayState | None:
     return IdentityRelayState(
         request_id=request_id.strip(),
         provider_id=provider_id.strip(),
-        request_state=request_state.strip(),
         target=target,
     )
 
@@ -309,9 +307,9 @@ def _invalid_request() -> JSONResponse:
     )
 
 
-def _internal_error(error: str, stage: str) -> JSONResponse:
+def _internal_error() -> JSONResponse:
     return JSONResponse(
-        {"code": 5000, "message": "", "error": error, "stage": stage},
+        {"code": 5000, "message": "", "error": "MPA authorization failed"},
         status_code=502,
         headers=_SECURITY_HEADERS,
     )
@@ -345,7 +343,6 @@ def _runtime_result_response(result: RuntimeCallbackResult) -> Response:
 def mount_mpa_identity_callback(
     app: FastAPI,
     *,
-    oauth2_handler: Any = None,
     hosted_callback_resolver: HostedCallbackResolver,
     runtime_credentials_resolver: RuntimeCredentialsResolver,
     http_client: httpx.AsyncClient | None = None,
@@ -383,7 +380,7 @@ def mount_mpa_identity_callback(
                     relay_state.request_id,
                     relay_state.target.instance_id,
                 )
-                return _internal_error(safe_error, stage)
+                return _internal_error()
 
         target = parse_mpa_runtime_state(state)
         if target is None:
@@ -419,7 +416,7 @@ def mount_mpa_identity_callback(
                 type(callback_error).__name__,
                 target.instance_id,
             )
-            response = _internal_error(safe_error, stage)
+            response = _internal_error()
         finally:
             if owned_client:
                 await client.aclose()

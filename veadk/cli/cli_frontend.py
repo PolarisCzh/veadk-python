@@ -9652,14 +9652,11 @@ def _run_frontend_server(
         from agentkit.sdk.runtime.client import AgentkitRuntimeClient
         from frontend.server.mpa_identity_callback import (
             MpaRuntimeCredentials,
-            MpaIdentityCallbackError,
             select_mpa_runtime,
         )
 
         ak, sk, token = _resolve_ve_credentials()
-        candidates: list[tuple[str, Any]] = []
-        all_candidate_refs: list[tuple[str, Any, str]] = []
-        tagged_candidate_refs: list[tuple[str, Any, str]] = []
+        candidate_refs: list[tuple[str, Any, str]] = []
         for region in _runtime_regions(provider, "all"):
             client = AgentkitRuntimeClient(
                 access_key=ak,
@@ -9674,49 +9671,38 @@ def _run_frontend_server(
                     kwargs["next_token"] = next_token
                 response = client.list_runtimes(_rt.ListRuntimesRequest(**kwargs))
                 runtimes = response.agent_kit_runtimes or []
-                candidates.extend((region, runtime) for runtime in runtimes)
                 for runtime in runtimes:
                     runtime_id = str(getattr(runtime, "runtime_id", "") or "").strip()
-                    if not runtime_id:
-                        continue
-                    candidate_ref = (region, client, runtime_id)
-                    all_candidate_refs.append(candidate_ref)
-                    if _runtime_tags(runtime).get("veadk:agent-type") == "mpa":
-                        tagged_candidate_refs.append(candidate_ref)
+                    if (
+                        runtime_id
+                        and _runtime_tags(runtime).get("veadk:agent-type") == "mpa"
+                    ):
+                        candidate_refs.append((region, client, runtime_id))
                 next_token = str(getattr(response, "next_token", "") or "")
                 if not next_token:
                     break
 
-        try:
-            region, runtime = select_mpa_runtime(candidates, target)
-        except MpaIdentityCallbackError as error:
-            if str(error) != "MPA Runtime not found":
+        def _get_runtime_detail(
+            candidate: tuple[str, Any, str],
+        ) -> tuple[str, Any] | None:
+            candidate_region, client, runtime_id = candidate
+            try:
+                detail = client.get_runtime(_rt.GetRuntimeRequest(RuntimeId=runtime_id))
+            except Exception as detail_error:
+                if is_agentkit_resource_not_found(detail_error):
+                    return None
                 raise
+            return candidate_region, detail
 
-            def _get_runtime_detail(
-                candidate: tuple[str, Any, str],
-            ) -> tuple[str, Any] | None:
-                candidate_region, client, runtime_id = candidate
-                try:
-                    detail = client.get_runtime(
-                        _rt.GetRuntimeRequest(RuntimeId=runtime_id)
-                    )
-                except Exception as detail_error:
-                    if is_agentkit_resource_not_found(detail_error):
-                        return None
-                    raise
-                return candidate_region, detail
-
-            candidate_refs = tagged_candidate_refs or all_candidate_refs
-            with ThreadPoolExecutor(
-                max_workers=min(16, max(1, len(candidate_refs)))
-            ) as executor:
-                detailed_candidates = [
-                    detail
-                    for detail in executor.map(_get_runtime_detail, candidate_refs)
-                    if detail is not None
-                ]
-            region, runtime = select_mpa_runtime(detailed_candidates, target)
+        with ThreadPoolExecutor(
+            max_workers=min(16, max(1, len(candidate_refs)))
+        ) as executor:
+            detailed_candidates = [
+                detail
+                for detail in executor.map(_get_runtime_detail, candidate_refs)
+                if detail is not None
+            ]
+        region, runtime = select_mpa_runtime(detailed_candidates, target)
         endpoint, api_key, auth_type, network_type = _resolve_runtime_conn(
             str(getattr(runtime, "runtime_id", "") or ""),
             region,
@@ -12031,7 +12017,7 @@ def _run_frontend_server(
 
             # Protect the API but exempt the SPA shell + this config endpoint so the
             # app can load and render its own login page when not signed in.
-            oauth2_handler = setup_oauth2(
+            setup_oauth2(
                 app,
                 oauth2_config,
                 exempt_paths={
@@ -12092,7 +12078,6 @@ def _run_frontend_server(
 
             mount_mpa_identity_callback(
                 app,
-                oauth2_handler=oauth2_handler,
                 hosted_callback_resolver=_resolve_mpa_hosted_callback,
                 runtime_credentials_resolver=_resolve_mpa_runtime,
             )
