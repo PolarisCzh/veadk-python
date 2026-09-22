@@ -16,6 +16,7 @@ const expectedDirectories = [
   "assets/visualizations/echarts",
   "assets/visualizations/mermaid",
 ];
+const unresolvedConflictMarker = /^(?:<{7,}|\|{7,}|={7,}|>{7,})(?: .*)?\r?$/m;
 
 async function filesUnder(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -63,6 +64,10 @@ function verifyReference(fromFile, reference) {
 for (const relativeFile of relativeFiles) {
   if (!/\.(?:html|css|js)$/.test(relativeFile)) continue;
   const contents = await readFile(path.join(webuiRoot, relativeFile), "utf8");
+  assert.ok(
+    !unresolvedConflictMarker.test(contents),
+    `${relativeFile} contains an unresolved Git conflict marker`,
+  );
   const patterns = relativeFile.endsWith(".html")
     ? [/(?:src|href)=["']([^"']+)["']/g]
     : relativeFile.endsWith(".css")
