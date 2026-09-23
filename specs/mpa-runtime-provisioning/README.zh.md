@@ -2,11 +2,12 @@
 
 - **Component ID：** `mpa-runtime-provisioning`
 - **状态：** 草案；提议变更由关联 PRD 管理
-- **修订日期：** 2026-09-20
+- **修订日期：** 2026-09-23
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
-- **负责代码：** `veadk/cli/cli_mpa.py`、`veadk/integrations/mpa/mpa_provision.py`、`veadk/integrations/mpa/mpa_runtime.py`
+- **关联 PRD：** [MPA 会话级 TOS 输出挂载](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.zh.md)
+- **负责代码：** `veadk/cli/cli_mpa.py`、`veadk/integrations/mpa/mpa_provision.py`、`veadk/integrations/mpa/mpa_runtime.py`、`veadk/integrations/mpa/mpa_tool.py`、`veadk/integrations/mpa/managed/worker.py`
 
 ## 职责
 
@@ -72,3 +73,15 @@ Studio/CLI 通过共享编排遵循相同保证。平台 operation 清单与 boo
 `CON-7` 至 `CON-12` 验证映射 PRD `AC-1`、`AC-2`、`AC-9`、`AC-10`：阻断旧端点的全新启动、缺失配置/finalization 失败/重启、不安全 override、轮换/重试、兼容回滚、活动/共享资源删除。复用上述 provisioning 回归并为新 profile 增加失败测试。拟议 runtime/live 结果均为 `not_run`。
 
 2026-09-15：新增无历史导入的功能迁移 profile 草案，实现与真实证据待补。
+## 会话级 TOS 输出挂载扩展
+
+当私有 MPA YAML 同时提供 `tos-access-key`、`tos-secret-key` 和
+`tos-bucket` 时，新建 worker Tool 必须携带 access-key 类型的 TOS 挂载：基础路径
+为 `/sandbox-session/default/default`，本地读写路径为 `/data/output`。凭证必须只
+保留在 Tool 请求中；Runtime 只收到
+`MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true` 和非敏感 bucket 名，不接收 AK/SK。
+
+每次新建 Sandbox Session 时，mpa-agent 必须按 AgentKit 标准会话路径
+`/sandbox-session/tool-{tool_id}/session-{session_id}/` 设置
+`CreateSessionRequest.TosMountPoints`。如果 Runtime 开关已启用但 bucket 缺失，必须
+关闭式失败。已有 Session 和外部指定 Tool 不做变更。
