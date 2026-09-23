@@ -145,9 +145,7 @@ def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     assert env["MPA_WORKLOAD_IDENTITY_NAME"] == "mi-abc123def456-studio"
     assert env["MPA_USER_POOL_NAME"] == "studio-userpool"
     assert env["MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
-    assert env["IDENTITY_CALLBACK_URL"] == (
-        "https://studio.example.com/oauth/callback"
-    )
+    assert env["IDENTITY_CALLBACK_URL"] == ("https://studio.example.com/oauth/callback")
     # AgentKit
     assert env["AGENTKIT_TOOL_ID"] == "tool-1"
 

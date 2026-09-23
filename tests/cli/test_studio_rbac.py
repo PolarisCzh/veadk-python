@@ -87,9 +87,7 @@ def test_build_mpa_identity_runtime_env_uses_studio_callback_origin() -> None:
     assert _build_mpa_identity_runtime_env(
         user_pool_name=" studio-userpool ",
         user_pool_client_name=" studio-client ",
-        oauth2_redirect_uri=(
-            "https://studio.example.com/oauth2/callback?ignored=true"
-        ),
+        oauth2_redirect_uri=("https://studio.example.com/oauth2/callback?ignored=true"),
     ) == {
         "IDENTITY_STARTUP_ENABLED": "true",
         "MPA_USER_POOL_NAME": "studio-userpool",

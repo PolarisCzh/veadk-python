@@ -2457,9 +2457,10 @@ def test_get_user_pool_resource_names_resolves_both_configured_uids() -> None:
         name="studio-client"
     )
 
-    assert identity_client.get_user_pool_resource_names(
-        "pool-id", "client-id"
-    ) == ("studio-userpool", "studio-client")
+    assert identity_client.get_user_pool_resource_names("pool-id", "client-id") == (
+        "studio-userpool",
+        "studio-client",
+    )
     pool_request = identity_client._api_client.get_user_pool.call_args.args[0]
     client_request = identity_client._api_client.get_user_pool_client.call_args.args[0]
     assert pool_request.user_pool_uid == "pool-id"
