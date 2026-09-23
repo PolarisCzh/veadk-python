@@ -21,6 +21,7 @@ function initial(region: string): {
   input: MpaCreationInput;
   taskId?: string;
   submitted?: boolean;
+  uploaded?: boolean;
 } {
   try {
     const saved = JSON.parse(
@@ -65,6 +66,7 @@ export function MpaCreateDialog({
   );
   const [task, setTask] = useState<MpaCreationTask | null>(null);
   const [config, setConfig] = useState<MpaCreationConfig | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true),
     [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -74,17 +76,21 @@ export function MpaCreateDialog({
     finished = useRef(false),
     alive = useRef(true);
   const action = useRef<AbortController | null>(null);
+  const imageTouched = useRef({ runtimeImage: false, workerImage: false });
+  const uploadSelected = useRef(false);
   const created = useRef(onCreated);
   created.current = onCreated;
   const running = task?.state === "running" || task?.state === "cancelling";
   const imagesValid =
     validCreationImage(input.runtimeImage) &&
     validCreationImage(input.workerImage);
+  const canCreate = Boolean(config?.configured || (config?.uploadAllowed && uploadFile));
+  const needsReselection = Boolean(saved.uploaded && !uploadFile);
   function persist(id?: string) {
     try {
       sessionStorage.setItem(
         `mpa-create:${region}`,
-        JSON.stringify({ input, taskId: id, submitted: true }),
+        JSON.stringify({ input, taskId: id, submitted: true, uploaded: Boolean(uploadFile) || saved.uploaded }),
       );
     } catch {
       /* Server identity still makes retries idempotent. */
@@ -108,6 +114,7 @@ export function MpaCreateDialog({
             value.configured &&
             !saved.submitted &&
             !saved.taskId &&
+            !uploadSelected.current &&
             !lock.current
           ) {
             setInput((previous) => ({
@@ -161,7 +168,8 @@ export function MpaCreateDialog({
   async function submit() {
     if (
       lock.current ||
-      !config?.configured ||
+      !canCreate ||
+      needsReselection ||
       !imagesValid ||
       running ||
       task?.state === "succeeded"
@@ -169,13 +177,23 @@ export function MpaCreateDialog({
       return;
     lock.current = true;
     setBusy(true);
-    setSubmitted(true);
     setError("");
-    persist(taskId);
     const controller = new AbortController();
     action.current = controller;
     try {
-      const value = await startMpaCreation(input, controller.signal);
+      let yaml: string | undefined;
+      if (uploadFile) {
+        try {
+          yaml = new TextDecoder("utf-8", { fatal: true }).decode(await uploadFile.arrayBuffer());
+        } catch {
+          setError(t(key("uploadInvalidUtf8")));
+          return;
+        }
+      }
+      if (controller.signal.aborted) return;
+      setSubmitted(true);
+      persist(taskId);
+      const value = await startMpaCreation(input, controller.signal, yaml);
       if (!alive.current || controller.signal.aborted) return;
       persist(value.taskId);
       setTaskId(value.taskId);
@@ -183,9 +201,7 @@ export function MpaCreateDialog({
       setRevision((v) => v + 1);
     } catch (reason) {
       if (alive.current && !controller.signal.aborted)
-        setError(
-          reason instanceof Error ? reason.message : t(key("creationFailed")),
-        );
+        setError(reason instanceof Error ? reason.message : t(key("creationFailed")));
     } finally {
       lock.current = false;
       if (alive.current) setBusy(false);
@@ -277,18 +293,19 @@ export function MpaCreateDialog({
                       maxLength={1024}
                       placeholder={t(key("imageDefault"))}
                       disabled={
-                        loading || busy || submitted || !config?.configured
+                        loading || busy || submitted || !canCreate
                       }
                       autoComplete="off"
                       spellCheck={false}
                       aria-invalid={!validCreationImage(input[field])}
                       aria-describedby={`mpa-${field}-help`}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        imageTouched.current[field] = true;
                         setInput((previous) => ({
                           ...previous,
                           [field]: event.target.value,
-                        }))
-                      }
+                        }));
+                      }}
                     />
                     <p
                       id={`mpa-${field}-help`}
@@ -306,6 +323,36 @@ export function MpaCreateDialog({
                     </p>
                   </label>
                 ))}
+                {config?.uploadAllowed && (
+                  <label>
+                    {t(key("uploadLabel"))}
+                    <input
+                      type="file"
+                      accept=".yaml,.yml"
+                      disabled={busy || running || task?.state === "succeeded"}
+                      onChange={(event) => {
+                        const file = event.currentTarget.files?.[0] ?? null;
+                        event.currentTarget.value = "";
+                        if (!file) return;
+                        if (!/\.ya?ml$/i.test(file.name) || file.size === 0 || file.size > 262144) {
+                          setUploadFile(null);
+                          uploadSelected.current = false;
+                          setError(t(key("uploadInvalid")));
+                          return;
+                        }
+                        setUploadFile(file);
+                        uploadSelected.current = true;
+                        setError("");
+                        setInput((previous) => ({
+                          ...previous,
+                          runtimeImage: imageTouched.current.runtimeImage ? previous.runtimeImage : "",
+                          workerImage: imageTouched.current.workerImage ? previous.workerImage : "",
+                        }));
+                      }}
+                    />
+                    <p>{uploadFile ? `${uploadFile.name} · ${t(key("uploadOnce"))}` : t(key("uploadOnce"))}</p>
+                  </label>
+                )}
                 <section
                   className="mpa-create-plan"
                   aria-label={t(key("plan"))}
@@ -319,6 +366,8 @@ export function MpaCreateDialog({
                 </section>
                 {loading ? (
                   <p role="status">{t(key("checking"))}</p>
+                ) : uploadFile ? (
+                  <p>{t(key("uploadReady"))}</p>
                 ) : config?.configured ? (
                   <p>{t(key("configured"))}</p>
                 ) : (
@@ -396,7 +445,8 @@ export function MpaCreateDialog({
                         loading={busy}
                         disabled={
                           loading ||
-                          !config?.configured ||
+                          !canCreate ||
+                          needsReselection ||
                           !imagesValid ||
                           !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agentId)
                         }

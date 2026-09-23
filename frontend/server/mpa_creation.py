@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import UUID
 from typing import Any
+from uuid import UUID
 
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -29,6 +32,7 @@ class CreationRequest(BaseModel):
     region: str = Field(pattern=r"^cn-[a-z]+$", max_length=32)
     runtimeImage: str = Field(default="", max_length=1024)
     workerImage: str = Field(default="", max_length=1024)
+    configYaml: str | None = Field(default=None, repr=False)
 
     @field_validator("runtimeImage", "workerImage")
     @classmethod
@@ -37,7 +41,12 @@ class CreationRequest(BaseModel):
 
 
 def mount_mpa_creation_routes(
-    app: FastAPI, *, owner, service: CreationTasks | None = None, supported=True
+    app: FastAPI,
+    *,
+    owner,
+    authorize_upload=None,
+    service: CreationTasks | None = None,
+    supported=True,
 ):
     tasks = service
 
@@ -65,11 +74,24 @@ def mount_mpa_creation_routes(
     @app.get("/web/mpa-creation/config")
     async def inspect(request: Request, region: str):
         owner(request)
+        upload_allowed = False
+        if supported and authorize_upload is not None:
+            try:
+                authorize_upload(request)
+                upload_allowed = True
+            except HTTPException as exc:
+                if exc.status_code not in {401, 403}:
+                    raise
         try:
             _, result = profile(region)
-            return result.summary()
+            return {**result.summary(), "uploadAllowed": upload_allowed}
         except ConfigurationError as exc:
-            return {"configured": False, "region": region, "error": str(exc)}
+            return {
+                "configured": False,
+                "region": region,
+                "error": str(exc),
+                "uploadAllowed": upload_allowed,
+            }
 
     @app.post("/web/mpa-creation/tasks", status_code=202)
     async def create(request: Request):
@@ -77,15 +99,89 @@ def mount_mpa_creation_routes(
         content = bytearray()
         async for chunk in request.stream():
             content.extend(chunk)
-            if len(content) > 8192:
+            if len(content) > 2 * 262144 + 8192:
                 raise HTTPException(413, "Creation request is too large")
         try:
             body = CreationRequest.model_validate_json(bytes(content))
         except ValidationError:
             raise HTTPException(422, "Invalid MPA creation request") from None
+        uploaded = body.configYaml
+        if uploaded is None and len(content) > 8192:
+            raise HTTPException(413, "Creation request is too large")
+        if uploaded is not None:
+            if not supported:
+                raise HTTPException(
+                    400, "MPA creation requires the Volcengine provider"
+                )
+            if authorize_upload is None:
+                raise HTTPException(403, "Administrator required for YAML upload")
+            authorize_upload(request)
+            encoded = uploaded.encode("utf-8")
+            if not encoded or len(encoded) > 262144:
+                raise HTTPException(413, "YAML must be between 1 byte and 256 KiB")
+            try:
+                values = yaml.safe_load(uploaded)
+            except yaml.YAMLError:
+                raise HTTPException(
+                    400, "Invalid YAML in MPA creation configuration"
+                ) from None
+            managed = values.get("managed") if isinstance(values, dict) else None
+            if isinstance(managed, dict) and any(
+                managed.get(key)
+                for key in (
+                    "template-file",
+                    "template_file",
+                    "credential-file",
+                    "credential_file",
+                )
+            ):
+                raise HTTPException(
+                    400, "Uploaded YAML cannot reference server-side files"
+                )
+            tasks = get_tasks()
+            fd, name = tempfile.mkstemp(
+                prefix="mpa-create-", suffix=".yaml", dir=tasks.path.parent
+            )
+            config_path = Path(name)
+            delegated = False
+            try:
+                with os.fdopen(fd, "wb") as file:
+                    file.write(encoded)
+                result = load_profile(config_path, region=body.region)
+                try:
+                    load_volcengine_credentials(result.managed.credential_file)
+                except ValueError:
+                    raise ConfigurationError(
+                        "Configure server deployment credentials"
+                    ) from None
+                payload = body.model_dump(mode="json", exclude={"configYaml"})
+                payload["configDigest"] = hashlib.sha256(encoded).hexdigest()
+                images = result.image_defaults()
+                for field in ("runtimeImage", "workerImage"):
+                    if payload[field]:
+                        images[field] = payload[field]
+                    else:
+                        payload.pop(field)
+                created = await tasks.start(
+                    identity,
+                    payload,
+                    config_path=config_path,
+                    timeout=result.managed.timeout_seconds,
+                    images=images,
+                    ephemeral_config=True,
+                )
+                delegated = True
+                return created
+            except ConfigurationError as exc:
+                raise HTTPException(400, str(exc)) from None
+            except TaskError as exc:
+                raise HTTPException(409, str(exc)) from None
+            finally:
+                if not delegated:
+                    config_path.unlink(missing_ok=True)
         try:
             path, config = profile(body.region)
-            payload = body.model_dump(mode="json")
+            payload = body.model_dump(mode="json", exclude={"configYaml"})
             images = config.image_defaults()
             for field in ("runtimeImage", "workerImage"):
                 if payload[field]:

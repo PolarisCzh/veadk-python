@@ -36,7 +36,7 @@ VeADK 负责托管 YAML 解析、云服务/数据库编排、有权限约束的�
 | `GET /web/mpa-creation/tasks/{id}` | 200 按所属用户隔离的任务快照 |
 | `POST /web/mpa-creation/tasks/{id}/cancel` | 200 任务快照；终态不变 |
 
-POST 请求体（最多 8192 字节，拒绝未知字段）：
+POST 请求体（未上传时最多 8192 字节，拒绝未知字段）：
 
 ```json
 {"requestId":"11111111-1111-4111-8111-111111111111","agentId":"customer-service","description":"Customer service","region":"cn-beijing"}
@@ -66,3 +66,7 @@ CON-9 创建镜像：弹窗包含可编辑的 MPA/Worker 镜像输入框，使�
 CON-10 — Worker 恢复/诊断：暂时性 Worker 操作最多尝试 4 次，间隔 1/2/4 秒，受默认 600 秒阶段预算和总任务期限限制。创建重试保持同一载荷/ClientToken；仅已登记的托管 Worker 可恢复已识别的不存在错误。永久/未知错误和归属冲突立即失败。只含安全枚举的诊断记录到日志和 `task_diagnostics`（每任务最新 100 条，跨重试保留），绝不持久化原始异常数据。任务 HTTP 字段和错误码不变。见[已批准设计](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.zh.md)。
 
 CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具有持久化 ID/令牌/哈希的托管 Worker 仅在 Creating/Pending/Starting/Initializing/Provisioning 或无状态时可等待缺失 ID/项目/归属标签，最多 4 次不完整观测，等待 5/10/20 秒。Ready 缺失字段、已有值冲突、终态/未知状态以及无托管创建意图的 Worker 立即失败。固定字段诊断不包含值。见[可见性修复](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-metadata-visibility.zh.md)。
+
+## CON-11 — 单次创建上传 YAML
+
+参见 [2026-09-23 设计](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-per-creation-yaml-upload.zh.md)。管理员可以在一次创建 POST 中加入可选的 `configYaml` JSON 字符串，其 UTF-8 长度为 1–262144 字节；此时请求体上限为 532480 字节。未上传配置的 JSON/CLI 行为保持不变。即使默认配置文件缺失，`GET /web/mpa-creation/config` 也返回不暴露配置内容的 `uploadAllowed` 布尔值。服务端单独鉴权上传，拒绝非空 `managed.template-file`、`managed.credential-file` 引用，在建任务前校验配置及服务端依赖，再把与任务存储相邻、权限为 0600 的文件交给子进程。持久任务输入只保存用于请求幂等判断的 SHA256 配置摘要；响应不返回摘要或 YAML。相同 request ID 但 YAML 不同会冲突。任务终态、取消及拒绝路径都清理临时文件。服务端必要环境变量和现有实例生命周期限制不变。测试覆盖鉴权、大小、格式、地域、摘要冲突、脱敏及清理。此契约描述当前分支，不代表已在云上验证。

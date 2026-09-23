@@ -40,6 +40,48 @@ def test_tasks_are_owner_scoped_and_duplicate_submission_reuses_identity(tmp_pat
     asyncio.run(run())
 
 
+def test_uploaded_config_file_is_removed_on_duplicate_and_terminal_state(tmp_path):
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        service.command = lambda: [sys.executable, "-c", "raise SystemExit(1)"]
+        payload = {
+            "requestId": "77777777-7777-4777-8777-777777777777",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+            "configDigest": "same-digest",
+        }
+        first = tmp_path / "first.yaml"
+        first.write_text("secret: private")
+        task = await service.start(
+            "owner", payload, config_path=first, timeout=60, ephemeral_config=True
+        )
+        await asyncio.gather(*service.running.values())
+        assert not first.exists()
+        duplicate = tmp_path / "duplicate.yaml"
+        duplicate.write_text("secret: private")
+        await service.start(
+            "owner", payload, config_path=duplicate, timeout=60, ephemeral_config=True
+        )
+        await asyncio.gather(*service.running.values())
+        assert not duplicate.exists()
+        changed = tmp_path / "changed.yaml"
+        changed.write_text("secret: changed")
+        with pytest.raises(TaskError):
+            await service.start(
+                "owner",
+                {**payload, "configDigest": "different-digest"},
+                config_path=changed,
+                timeout=60,
+                ephemeral_config=True,
+            )
+        assert not changed.exists()
+        assert "private" not in str(service.get("owner", task["taskId"]))
+        await service.close()
+
+    asyncio.run(run())
+
+
 def test_raw_child_errors_never_reach_task_response(tmp_path):
     async def run():
         service = CreationTasks(tmp_path / "tasks.sqlite3")

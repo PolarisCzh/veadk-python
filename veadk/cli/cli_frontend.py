@@ -2747,7 +2747,10 @@ def _run_frontend_server(
     from frontend.server.mpa_creation import mount_mpa_creation_routes
 
     mount_mpa_creation_routes(
-        app, owner=_feishu_setup_owner, supported=provider == "volcengine"
+        app,
+        owner=_feishu_setup_owner,
+        authorize_upload=lambda request: _require_studio_admin(request),
+        supported=provider == "volcengine",
     )
 
     mount_feishu_bot_setup_routes(

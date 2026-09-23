@@ -13,7 +13,10 @@ vi.mock("../src/adk/mpaCreation", () => ({
 }));
 vi.mock("react-i18next", () => {
   const t = (key: string) => key;
-  return { useTranslation: () => ({ t }) };
+  return {
+    useTranslation: () => ({ t }),
+    initReactI18next: { type: "3rdParty", init: () => {} },
+  };
 });
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
@@ -54,6 +57,166 @@ it("blocks creation when prerequisites are not configured", async () => {
     (b) => b.textContent === "myAgents.mpaCreate.submit",
   );
   expect(button?.disabled).toBe(true);
+});
+
+it("uses a selected YAML only for this creation without persisting its contents", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: false,
+    region: "cn-beijing",
+    uploadAllowed: true,
+    error: "Missing server profile",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount();
+  expect(submitButton().disabled).toBe(true);
+  const yaml = "region: cn-beijing\nmanaged: {version: 1}\n";
+  const file = new File([yaml], "create.yaml", { type: "text/yaml" });
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => new TextEncoder().encode(yaml).buffer,
+  });
+  const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  await act(async () => {
+    Object.defineProperty(picker, "files", { configurable: true, value: [file] });
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(submitButton().disabled).toBe(false);
+  await act(async () => submitButton().click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining({ region: "cn-beijing" }),
+    expect.any(AbortSignal),
+    yaml,
+  );
+  expect(sessionStorage.getItem("mpa-create:cn-beijing")).not.toContain(yaml);
+});
+
+it("clears untouched server image defaults when YAML is selected", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    uploadAllowed: true,
+    runtimeImage: "registry.example/mpa:v1",
+    workerImage: "registry.example/worker:v1",
+  });
+  await mount();
+  const file = new File(["managed: {}"], "create.yaml");
+  const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  await act(async () => {
+    Object.defineProperty(picker, "files", { configurable: true, value: [file] });
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(field("runtimeImage").value).toBe("");
+  expect(field("workerImage").value).toBe("");
+});
+
+it("retains a user-edited image when YAML is selected", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    uploadAllowed: true,
+    runtimeImage: "registry.example/mpa:v1",
+    workerImage: "registry.example/worker:v1",
+  });
+  await mount();
+  await edit("runtimeImage", "registry.example/mpa:custom");
+  const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  await act(async () => {
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [new File(["managed: {}"], "create.yaml")],
+    });
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(field("runtimeImage").value).toBe("registry.example/mpa:custom");
+  expect(field("workerImage").value).toBe("");
+});
+
+it("rejects invalid files and invalid UTF-8 without submitting", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: false,
+    region: "cn-beijing",
+    uploadAllowed: true,
+  });
+  await mount();
+  const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  await act(async () => {
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [new File(["not yaml"], "create.txt")],
+    });
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(submitButton().disabled).toBe(true);
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.uploadInvalid");
+  const file = new File([new Uint8Array([0xff])], "create.yaml");
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => new Uint8Array([0xff]).buffer,
+  });
+  await act(async () => {
+    Object.defineProperty(picker, "files", { configurable: true, value: [file] });
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () => submitButton().click());
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.uploadInvalidUtf8");
+});
+
+it("requires reselecting YAML after reopening a submitted upload", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId: "11111111-1111-4111-8111-111111111111",
+        agentId: "mi-test",
+        description: "",
+        region: "cn-beijing",
+      },
+      submitted: true,
+      uploaded: true,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    uploadAllowed: true,
+  });
+  await mount();
+  expect(submitButton().disabled).toBe(true);
+  const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  await act(async () => {
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [new File(["managed: {}"], "create.yaml")],
+    });
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(submitButton().disabled).toBe(false);
+});
+
+it("includes YAML only in the selected creation API request", async () => {
+  const realApi = await vi.importActual<typeof import("../src/adk/mpaCreation")>(
+    "../src/adk/mpaCreation",
+  );
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+    ok: true,
+    json: async () => ({ taskId: "task-1", state: "running" }),
+  }));
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const input = {
+      requestId: "11111111-1111-4111-8111-111111111111",
+      agentId: "mi-test",
+      description: "",
+      region: "cn-beijing",
+    };
+    await realApi.startMpaCreation(input, new AbortController().signal, "managed: {}\n");
+    await realApi.startMpaCreation(input, new AbortController().signal);
+    const first = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const second = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(first.configYaml).toBe("managed: {}\n");
+    expect(second.configYaml).toBeUndefined();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 it("persists identity before submission and prevents repeated clicks", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({

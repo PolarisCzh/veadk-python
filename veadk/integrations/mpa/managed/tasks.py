@@ -60,6 +60,7 @@ class CreationTasks:
             )
         os.chmod(path, 0o600)
         self.running: dict[str, asyncio.Task] = {}
+        self._uploaded_paths: set[Path] = set()
 
     @contextmanager
     def db(self):
@@ -140,6 +141,8 @@ class CreationTasks:
                     ),
                 )
                 return self.get(owner, task_id)
+        payload = json.loads(row["payload"])
+        payload.pop("configDigest", None)
         return {
             "taskId": task_id,
             "state": row["state"],
@@ -147,13 +150,33 @@ class CreationTasks:
             "result": json.loads(row["result"]),
             "error": row["error"],
             "images": json.loads(row["images"]),
-            **json.loads(row["payload"]),
+            **payload,
         }
 
-    async def start(self, owner, payload, *, config_path, timeout, images=None):
+    async def start(
+        self,
+        owner,
+        payload,
+        *,
+        config_path,
+        timeout,
+        images=None,
+        ephemeral_config=False,
+    ):
         encoded = json.dumps(payload, sort_keys=True)
         # Reconcile stopped supervisors before acquiring the write transaction.
         # get() may write interrupted status and must not nest a SQLite writer.
+        try:
+            return await self._start_owned(
+                owner, payload, encoded, config_path, timeout, images, ephemeral_config
+            )
+        finally:
+            if ephemeral_config and Path(config_path) not in self._uploaded_paths:
+                Path(config_path).unlink(missing_ok=True)
+
+    async def _start_owned(
+        self, owner, payload, encoded, config_path, timeout, images, ephemeral_config
+    ):
         with self.db() as db:
             active = db.execute(
                 "SELECT owner,id FROM tasks WHERE state IN ('running','cancelling')"
@@ -195,12 +218,22 @@ class CreationTasks:
                     json.dumps(selected_images),
                 ),
             )
+        snapshot = self.get(owner, task_id)
         task = asyncio.create_task(
             self._run(task_id, owner, payload, config_path, timeout)
         )
+        if ephemeral_config:
+            path = Path(config_path)
+            self._uploaded_paths.add(path)
+
+            def remove_upload(_):
+                self._uploaded_paths.discard(path)
+                path.unlink(missing_ok=True)
+
+            task.add_done_callback(remove_upload)
         self.running[task_id] = task
         task.add_done_callback(lambda _: self.running.pop(task_id, None))
-        return self.get(owner, task_id)
+        return snapshot
 
     async def _run(self, task_id, owner, payload, config_path, timeout):
         process = None

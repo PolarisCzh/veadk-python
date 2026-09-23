@@ -56,6 +56,15 @@
   outline: 2px solid var(--studio-text-primary);
   outline-offset: 2px;
 }
+.mpa-create-body input[type="file"]::file-selector-button {
+  border: 1px solid var(--studio-border-default);
+  border-radius: 6px;
+  background: var(--studio-bg-panel);
+  color: var(--studio-text-primary);
+  padding: 6px 10px;
+  margin-right: 12px;
+  cursor: pointer;
+}
 .mpa-create-plan {
   border: 1px solid var(--studio-border-default);
   border-radius: 10px;

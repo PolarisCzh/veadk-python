@@ -26,6 +26,7 @@ export interface MpaCreationTask extends MpaCreationInput {
 export interface MpaCreationConfig {
   configured: boolean;
   region: string;
+  uploadAllowed?: boolean;
   error?: string;
   runtimeImage?: string;
   workerImage?: string;
@@ -61,7 +62,13 @@ export const getMpaCreationConfig = (region: string, signal: AbortSignal) =>
 export const startMpaCreation = (
   input: MpaCreationInput,
   signal: AbortSignal,
-) => request<MpaCreationTask>("tasks", signal, input);
+  configYaml?: string,
+) =>
+  request<MpaCreationTask>(
+    "tasks",
+    signal,
+    configYaml === undefined ? input : { ...input, configYaml },
+  );
 export const getMpaCreation = (id: string, signal: AbortSignal) =>
   request<MpaCreationTask>(`tasks/${encodeURIComponent(id)}`, signal);
 export const cancelMpaCreation = (id: string, signal: AbortSignal) =>

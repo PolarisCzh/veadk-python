@@ -36,7 +36,7 @@ VeADK owns managed YAML parsing, cloud/database orchestration, authorized durabl
 | `GET /web/mpa-creation/tasks/{id}` | 200 owner-scoped task snapshot |
 | `POST /web/mpa-creation/tasks/{id}/cancel` | 200 task snapshot; terminal tasks unchanged |
 
-POST body (maximum 8192 bytes, unknown fields rejected):
+POST body (maximum 8192 bytes without an upload; unknown fields rejected):
 
 ```json
 {"requestId":"11111111-1111-4111-8111-111111111111","agentId":"customer-service","description":"Customer service","region":"cn-beijing"}
@@ -66,3 +66,7 @@ CON-9 creation images: the dialog has editable MPA/Worker image inputs initializ
 CON-10 — worker recovery/diagnostics: transient Worker operations have at most 4 attempts with 1/2/4-second waits, within a default 600-second stage budget and the task deadline. Create retries retain the same payload/ClientToken; recognized not-found is recoverable only for a registered managed worker. Permanent/unknown errors and ownership conflicts fail immediately. Safe enum-only diagnostics are logged and stored in `task_diagnostics` (latest 100 per task, retained across retries); raw exception data is never persisted. Task HTTP fields and error codes are unchanged. See [approved design](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.md).
 
 CON-10 metadata visibility: distinguish absent initialization metadata from explicit conflicts. A managed Worker with persisted ID/token/hash may wait for missing ID/project/ownership tags only in Creating/Pending/Starting/Initializing/Provisioning or absent status, up to 4 incomplete observations with 5/10/20-second waits. Ready with missing metadata, present conflicts, terminal/unknown states and workers without managed creation intent fail immediately. Fixed field diagnostics never include values. See [visibility fix](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-metadata-visibility.md).
+
+## CON-11 — per-creation YAML upload
+
+See the [2026-09-23 design](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-per-creation-yaml-upload.md). An administrator may add an optional `configYaml` JSON string of 1–262144 UTF-8 bytes to one creation POST; the request-body cap is 532480 bytes in this case. Existing no-upload JSON/CLI behavior remains unchanged. `GET /web/mpa-creation/config` exposes a nonsecret `uploadAllowed` boolean even if the default server profile is missing. The server authorizes uploads separately, rejects nonempty `managed.template-file` and `managed.credential-file` references, validates the profile and server prerequisites before task creation, then passes a mode-0600 file alongside the task store to the child runner. Only a SHA256 configuration digest enters the persisted payload for request-idempotency; responses omit both digest and YAML. A duplicate request with changed YAML conflicts. Temporary files are removed on terminal, cancellation, or rejected paths. Required server environment and existing instance-lifetime limitations remain unchanged. Tests cover authorization, size, malformed content, region, digest conflict, redaction, and cleanup. This contract describes this branch, not a verified cloud deployment.
