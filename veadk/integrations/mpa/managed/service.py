@@ -106,6 +106,28 @@ def apply_runtime_settings(template: dict, options: Runtime):
         raise ConfigurationError("Minimum instances exceed maximum instances")
 
 
+def apply_identity_settings(template: dict, values: dict):
+    identity_env = {
+        key: str(values.get(field) or "").strip()
+        for key, field in (
+            ("MPA_USER_POOL_NAME", "user_pool_name"),
+            ("MPA_USER_POOL_CLIENT_NAME", "user_pool_client_name"),
+            ("IDENTITY_CALLBACK_URL", "identity_callback_url"),
+        )
+    }
+    if not any(identity_env.values()):
+        return
+    missing = [key for key, value in identity_env.items() if not value]
+    if missing:
+        raise ConfigurationError(
+            "Incomplete MPA identity configuration: " + ", ".join(missing)
+        )
+    env = env_map(template)
+    env.update(identity_env)
+    env["IDENTITY_STARTUP_ENABLED"] = "true"
+    template["Envs"] = [{"Key": key, "Value": value} for key, value in env.items()]
+
+
 async def provision(
     profile: Profile,
     *,
@@ -144,6 +166,7 @@ async def provision(
     else:
         template = fresh_template(profile, agent_id, account)
     apply_runtime_settings(template, profile.managed.runtime)
+    apply_identity_settings(template, profile.values)
     env = env_map(template)
     for key in (
         "AGENTKIT_RUNTIME_ID",

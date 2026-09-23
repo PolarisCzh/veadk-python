@@ -24,9 +24,14 @@ def test_network_gateway_worker_precede_runtime(
         entry = Registry()
         cloud = Cloud(entry)
         events = []
+        identity_values = {
+            "user_pool_name": "studio-pool",
+            "user_pool_client_name": "studio-client",
+            "identity_callback_url": "https://studio.example.com/oauth/callback",
+        }
         profile = Profile(
             region="cn-beijing",
-            values={},
+            values=identity_values,
             template=template(),
             admin_url="fake",
             shared_url="postgresql://registry.example/shared",
@@ -52,6 +57,7 @@ def test_network_gateway_worker_precede_runtime(
         elif source == "flat":
             profile.template = None
             profile.values = {
+                **identity_values,
                 "pg_host": "pg.example",
                 "pg_user": "app",
                 "pg_password": "fake",
@@ -90,6 +96,12 @@ def test_network_gateway_worker_precede_runtime(
             assert events == ["gateway", "worker"]
             assert request["ToolId"] == "t-one"
             assert request["ArtifactUrl"] == (image or "registry/image:v1")
+            env = service.env_map(request)
+            assert env["MPA_USER_POOL_NAME"] == "studio-pool"
+            assert env["MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+            assert env["IDENTITY_CALLBACK_URL"] == (
+                "https://studio.example.com/oauth/callback"
+            )
             if image:
                 assert request["ArtifactType"] == "image"
             if source == "flat":
@@ -301,6 +313,28 @@ def test_runtime_settings_override_source_without_losing_other_environment():
     assert env["MODEL_AGENT_NAME"] == "explicit-model"
     assert env["PGHOST"] == "explicit-db"
     assert env["PGUSER"] == "app"
+
+
+def test_managed_identity_settings_override_template_and_require_complete_pair():
+    from veadk.integrations.mpa.managed.config import ConfigurationError
+
+    source = template()
+    service.apply_identity_settings(
+        source,
+        {
+            "user_pool_name": "studio-pool",
+            "user_pool_client_name": "studio-client",
+            "identity_callback_url": "https://studio.example.com/oauth/callback",
+        },
+    )
+    env = service.env_map(source)
+    assert env["MPA_USER_POOL_NAME"] == "studio-pool"
+    assert env["MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+    assert env["IDENTITY_CALLBACK_URL"] == "https://studio.example.com/oauth/callback"
+    assert env["IDENTITY_STARTUP_ENABLED"] == "true"
+
+    with pytest.raises(ConfigurationError, match="MPA_USER_POOL_CLIENT_NAME"):
+        service.apply_identity_settings(template(), {"user_pool_name": "studio-pool"})
 
 
 def test_omitted_runtime_settings_preserve_source():

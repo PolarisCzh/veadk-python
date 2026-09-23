@@ -22,7 +22,7 @@ registry-name: agentkit-platform-<account>
 # account-id: "<expected-account>"
 region: cn-beijing
 
-# --- Identity (reuse the Studio UserPool and client by name) ---
+# --- Identity (also injected by managed Studio creation for every template source) ---
 identity-region: cn-beijing
 user-pool-name: agentkit-studio-userpool
 user-pool-client-name: agentkit-studio-client
