@@ -4,7 +4,42 @@
 
 VeADK prepares MPA prerequisites and deploys an agent without an `agentkit-mpa-agent` source checkout. Studio and `veadk mpa provision` use the same implementation. The deployed MPA image must support account-shared APIG registration and metadata bootstrap.
 
-## Server setup
+## Automatic PG setup (recommended for new installations)
+
+Set `managed.postgres.mode: auto` in the private YAML; the example uses this mode. No PG host/user/password or PG URL environment variables are needed. Use the deployment account's rotating STS credentials with `GetCallerIdentity`, AIDAP `CreateWorkspace`, `DescribeWorkspaces`, `DescribeWorkspaceDetail`, `DescribeBranches`, `DescribeComputes`, `DescribeWorkspaceEndpoint`, `DescribeDBAccounts`, `DescribeDatabases`, and `DescribeDBAccountConnection` permissions, in addition to the existing AgentKit/VPC/APIG permissions and model/role setup. Enable AIDAP for that account and ensure the returned PostgreSQL endpoint is reachable from Studio and Runtime. This flow uses the provider's public endpoint and does not modify database network/allowlist settings.
+
+```yaml
+managed:
+  version: 1
+  postgres:
+    mode: auto
+    admin-workspace-name: mpa_admin_workspace
+    business-workspace-name: mpa_business_workspace
+    project-name: default
+    bootstrap-path: .adk/mpa-pg-bootstrap.sqlite3
+    timeout-seconds: 600
+  # Keep existing runtime, worker and network options.
+```
+
+After creation submission, prepare/reuse `mpa_admin_workspace/mpa_admin_db`, then one business Workspace with a separate `mpa_agent_<hash>` database per MPA. The creation page's PG step shows an explanation instead of editable connection fields. Workspace connections are obtained server-side; flat/template/reference PG settings are ignored or overridden in auto mode. Optional `admin-workspace-id` / `business-workspace-id` adopt existing resources; scope/name/engine must match. The default engine is PostgreSQL_17. No cloud resources are allocated by configuration inspection or dry-run.
+
+All Studio/CLI processes for a scope must use the **same durable bootstrap file path on one coordinator host**. Preserve this file across restarts and redeployments. The private SQLite file contains only intents and IDs, never passwords. Cancelled/failed jobs retain resources. If a create response is lost, retry discovers the tagged Workspace; if its outcome is still uncertain, inspect AIDAP and provide the matching ID. Do not delete state to force another creation. Confirmed IAM/parameter rejections can be retried after correction. No Workspace is automatically deleted.
+
+### Existing installation cutover
+
+Automatic mode refuses to run while the old shared registry URL remains configured by default. If old MPA resources may be abandoned for **new** creations, set `managed.postgres.legacy-urls: ignore` in the private YAML. This profile then ignores both `SHARED_APIG_DATABASE_URL` and `DEPLOYMENT_DATABASE_ADMIN_URL` even if they remain in the Studio process environment. New agents start with fresh admin and business Workspaces; old agents, databases, Runtime connections and records are not changed or deleted. Do not use this setting to resume an unfinished old creation task under the same agent ID.
+
+To preserve and migrate old relationships instead, keep the default `legacy-urls: reject` and use the following cutover. Do not simply unset the old URL on an existing installation: that would hide existing resource relationships.
+
+1. Back up the source registry and stop **all registry writers**, including Runtime bootstrap writers, through the whole cutover.
+2. Configure auto mode and explicitly adopt the current business Workspace ID and its actual `business-workspace-name`. Keep the business endpoint unchanged. PostgreSQL_17 is required. Supply the old registry URL through a private environment variable such as `OLD_SHARED_APIG_DATABASE_URL`.
+3. Run `veadk mpa init-admin-db --config mpa-create.config.yaml --source-url-env OLD_SHARED_APIG_DATABASE_URL`. It prepares the Workspaces/management DB and copies registry records atomically using the migration rules below. It does not migrate business databases or alter running Runtime environments.
+4. Verify copied resource bindings. Coordinate existing Runtime `SHARED_APIG_DATABASE_URL` updates to the new management database with the existing safe deployment procedure; remove the legacy registry URL from the Studio/CLI environment only after cutover is complete. Preserve old business credentials or explicitly verify the adopted connection before removing obsolete settings. Resume writers only after verification. Keep the source backup for rollback.
+
+No live migration or cloud allocation is performed by the repository tests. See the [automatic PG design](../../../../prd-spec/features/mpa-space-scoped-resources/2026-09-23-auto-pg-workspaces.md) for limitations and verification.
+
+
+## Manual / legacy server setup
 
 1. Copy the [example YAML](../../../../prd-spec/features/mpa-agent-oneclick-provision/mpa-create.config.example.yaml) to a private `mpa-create.config.yaml`. Keep filled-in configuration outside Git.
 2. Supply an existing PostgreSQL instance, shared registry database, database login/owner, Runtime/worker IAM roles, images and model access. The deployment administrator needs `CREATEDB` and permission to assign the business database owner. The registry needs schema-write permissions and direct/session pooling; transaction pooling is incompatible with advisory locks.
@@ -16,9 +51,56 @@ VeADK prepares MPA prerequisites and deploys an agent without an `agentkit-mpa-a
 
 The deployment identity needs access to AgentKit Runtime, Skill Space and Tool operations, VPC/subnet operations, APIG/IM Gateway operations and `GetCallerIdentity`. The Runtime/worker roles separately need the permissions and mounted credentials required by their images. IAM policies, PostgreSQL cloud instances, model services and network connectivity are operator prerequisites, not automatically created resources.
 
+## Manual two-Workspace configuration
+
+Pre-create both Workspaces in the [AIDAP console](https://console.volcengine.com/aidap/region:aidap+cn-beijing/):
+
+```text
+mpa_admin_workspace
+└── mpa_admin_db
+    ├── mpa_account_network
+    ├── mpa_account_apig
+    └── mpa_agent_deployment
+business Workspace (reuse the current Workspace)
+├── mpa_agent_<agent-A-hash>
+└── mpa_agent_<agent-B-hash>
+```
+
+For manual mode, adapt the example YAML using `managed.postgres.mode: manual`. Set `admin-workspace-name: mpa_admin_workspace`, the actual `admin-workspace-id` and `business-workspace-id`, and `admin-database-url-env: MPA_ADMIN_DATABASE_ADMIN_URL`. The two IDs and hosts must differ; the management connection must use database `mpa_admin_db`. Verify IDs and endpoint ownership in the console: local validation does not query AIDAP or prove cloud ownership. Omitting `managed.postgres` retains legacy behavior.
+
+| Server environment variable | Destination and use |
+| --- | --- |
+| `DEPLOYMENT_DATABASE_ADMIN_URL` | Business Workspace, existing maintenance database; creates per-agent business databases. |
+| `SHARED_APIG_DATABASE_URL` | Management Workspace, `mpa_admin_db`; registry login/owner with schema access and session pooling. |
+| `MPA_ADMIN_DATABASE_ADMIN_URL` | Management Workspace, an existing maintenance database such as `aidb`; only used by `init-admin-db`, with `CREATEDB` and permission to assign the registry owner. |
+
+Keep flat `pg-host`, `pg-user`, `pg-password` and template/runtime PG settings on the **business** Workspace. The management maintenance credential does not enter Runtime. The existing MPA image still receives `SHARED_APIG_DATABASE_URL` for registry bootstrap; this change does not redesign its permissions or add per-agent database users. No Workspace is created or deleted automatically. Normal creation requires the management database to exist and never creates an empty replacement silently.
+
+For a fresh installation:
+
+```bash
+veadk mpa init-admin-db --config /secure/mpa-create.config.yaml
+```
+
+For an existing installation, **copy the old shared registry before cutover**:
+
+1. Back up the old registry. Finish or reconcile pending Runtime deployments using the original configuration first: the copy rejects `pending` records because their idempotency hashes include the old shared URL. Stop Studio creation jobs and all Runtime/channel processes that can write registry records; keep them stopped through the endpoint switch. Retain business PG addresses, database names, credentials and data.
+2. Configure the new private profile and environment variables above. Put the old shared connection in `OLD_SHARED_APIG_DATABASE_URL`. The source credential needs SELECT and SHARE table-lock privileges on the three tables. Do not pass a URL as a command-line argument.
+3. Run:
+
+   ```bash
+   veadk mpa init-admin-db --config /secure/mpa-create.config.yaml --source-url-env OLD_SHARED_APIG_DATABASE_URL
+   ```
+
+4. The command verifies the destination owner and rejects unrelated public objects. It copies only the three tables, preserving complete JSON records and identities. An identical rerun is safe; conflicting/extra target records abort the entire copy transaction. The source receives no writes. The target database may remain after failure; retry after resolving the cause. Lock/statement limits are 5/30 seconds; the overall limit is 120 seconds.
+5. Verify returned table counts and resource identities. Change the Studio/CLI shared URL and explicitly roll out the new `SHARED_APIG_DATABASE_URL` to existing MPA Runtimes before restoring writers. New deployments receive it automatically; this command does not update existing Runtimes. Keep their business PG settings unchanged and verify Runtime, channel and creation readiness.
+6. Retain the source for recovery. Before any writes to the new registry, rollback can restore the old URL to **all** consumers. After new writes, reconcile registries before rollback; never switch consumers independently or delete shared resources to retry.
+
+VPC/APIG still share by account and region. Deployment JSON records retain both Workspace IDs; changed bindings or existing business endpoints are rejected on retry before cloud writes. Business database naming and ownership checks remain unchanged. Copying these tables does not migrate business data or update Runtime images.
+
 ## Use in Studio
 
-Choose **Agents → MPA agents → Create MPA agent**. Managers with agent-management permission can set the stable agent ID and description. Review the resource plan and submit. The workflow prepares account network/APIG/IM Gateway, a worker, an isolated business database and Skill Space, then deploys and checks Runtime and application readiness. Successful creation refreshes the directory.
+Choose **Agents → MPA agents → Create MPA agent**. The three steps collect basic information, an existing PostgreSQL instance host/port, and optional OpenViking service URL/resource ID. The generated agent ID is read-only. The PG step links to the [Volcengine AIDAP console](https://console.volcengine.com/aidap/region:aidap+cn-beijing/); its host/port must match the administrator connection configured on the server. The OpenViking step links to the [context-management console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default); this is a console page, not the service URL to enter. PG credentials and OpenViking API key remain server-configured. Review the resource plan and submit on step three. The workflow prepares account network/APIG/IM Gateway, a worker, an isolated business database and Skill Space, then deploys and checks Runtime and application readiness. Successful creation refreshes the directory.
 
 The initial configuration check is local validation, **not** proof of live permissions or connectivity. Cloud identity and database permissions are checked after submission and before resource creation; each later cloud step validates its own response. Close the dialog to leave creation running, or cancel explicitly to stop orchestration. Reopen it in the same browser session to recover progress. The dialog supports keyboard operation, multiline Chinese input, both themes and narrow windows.
 
@@ -120,3 +202,9 @@ Use the configured `VEADK_MPA_TASK_DB` path when overridden. Times in this examp
 ### Initialization metadata delays
 
 For managed Workers with a persisted creation ID/token/hash, missing ID/project/ownership tags during initialization are polled up to four incomplete observations, waiting 5, 10 and 20 seconds. This handles resources whose metadata becomes visible after CreateTool returns. Explicit conflicting values still fail immediately; Ready with missing metadata and terminal/unknown states receive no grace. These waits respect the existing stage deadline/cancellation and never create another Worker. Safe diagnostic operations identify the affected field (`worker_id`, `worker_project`, `worker_managed_by`, `worker_agent_key`, `worker_agent_binding`, `worker_state`); `metadata_pending` means waiting, `metadata_missing` means the bounded check failed. Field values remain private.
+
+Managed provisioning accepts PostgreSQL registry URLs with `sslmode` and converts that query parameter to `ssl` for the MPA Runtime's asyncpg driver. The TLS mode is preserved. This applies to both automatic and manually configured management databases; no image rebuild is required. Existing pending deployments can resume this conversion without changing their resource identities.
+
+## Studio A2A discovery defaults
+
+Flat creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=false`. With a compatible MPA image, Studio's Runtime-key `/list-apps` probe receives 404 and discovers the A2A agent card as `a2a-default`. `A2A_TIP_VERIFY_ENABLED=false` retains the existing outer gateway key-auth integration; REST JWT authentication is not bypassed. Explicit `managed.runtime.env` overrides remain supported, and referenced Runtime/template environments are preserved. Existing Runtimes need an explicit configuration update and release; reconnect in Studio to refresh discovery. No frontend rebuild is needed for this default change.

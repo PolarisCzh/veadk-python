@@ -10,12 +10,21 @@ from uuid import UUID
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from veadk.integrations.mpa.managed.config import (
     ConfigurationError,
     load_profile,
     validate_image_reference,
+    validate_creation_resources,
+    with_creation_resources,
 )
 from veadk.integrations.mpa.managed.credentials import load_volcengine_credentials
 from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError, owner_key
@@ -29,11 +38,20 @@ class CreationRequest(BaseModel):
     region: str = Field(pattern=r"^cn-[a-z]+$", max_length=32)
     runtimeImage: str = Field(default="", max_length=1024)
     workerImage: str = Field(default="", max_length=1024)
+    pgHost: str = Field(default="", max_length=255)
+    pgPort: str = Field(default="", max_length=5)
+    openvikingUrl: str = Field(default="", max_length=1024)
+    openvikingResourceId: str = Field(default="", max_length=128)
 
     @field_validator("runtimeImage", "workerImage")
     @classmethod
     def validate_image(cls, value):
         return validate_image_reference(value)
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        validate_creation_resources(self.model_dump())
+        return self
 
 
 def mount_mpa_creation_routes(
@@ -86,10 +104,17 @@ def mount_mpa_creation_routes(
         try:
             path, config = profile(body.region)
             payload = body.model_dump(mode="json")
+            resources = validate_creation_resources(payload)
+            with_creation_resources(config, payload)
             images = config.image_defaults()
             for field in ("runtimeImage", "workerImage"):
                 if payload[field]:
                     images[field] = payload[field]
+                else:
+                    payload.pop(field)
+            for field in ("pgHost", "pgPort", "openvikingUrl", "openvikingResourceId"):
+                if resources[field]:
+                    payload[field] = resources[field]
                 else:
                     payload.pop(field)
             return await get_tasks().start(

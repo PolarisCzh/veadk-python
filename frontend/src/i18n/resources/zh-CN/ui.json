@@ -1594,6 +1594,28 @@
     },
     "wakingHint": "正在唤醒智能体，可能需要一些时间。",
     "mpaCreate": {
+      "stepsLabel": "创建步骤",
+      "steps": {
+        "basics": "基本信息",
+        "postgres": "PostgreSQL",
+        "openviking": "OpenViking",
+        "autoPostgres": "数据库"
+      },
+      "next": "下一步",
+      "previousStep": "上一步",
+      "pgDescription": "选择已有的 PostgreSQL 实例。创建流程会在该实例中准备智能体的独立业务库。",
+      "pgSplitDescription": "使用已配置的业务 PG Workspace。多个智能体共用此 Workspace，每个智能体拥有独立业务库。共享资源记录单独存放在 mpa_admin_workspace / mpa_admin_db，由管理员配置。",
+      "pgConsole": "前往火山引擎 AIDAP 创建或查看 PG Workspace",
+      "pgHost": "PG 主机地址",
+      "pgPort": "PG 端口",
+      "pgInvalid": "请填写有效的 PG 主机地址和端口。",
+      "pgCredentials": "PG 连接账号和密码由部署服务配置；主机和端口须与服务端配置一致。",
+      "openvikingDescription": "可选。填写 OpenViking 服务地址和资源 ID，供新智能体使用。",
+      "openvikingConsole": "前往火山引擎查看 OpenViking 资源",
+      "openvikingUrl": "OpenViking 服务地址",
+      "openvikingResourceId": "OpenViking 资源 ID",
+      "openvikingInvalid": "请填写有效的 HTTPS 服务地址和资源 ID。",
+      "openvikingCredentials": "OpenViking API Key 由部署服务配置。留空沿用当前配置。",
       "runtimeImage": "MPA 镜像",
       "workerImage": "Worker 镜像",
       "imageDefault": "留空使用配置文件中的默认镜像",
@@ -1641,9 +1663,15 @@
         "skills": "准备技能空间",
         "worker": "准备执行环境",
         "deploying": "准备数据库、技能空间和 Runtime",
-        "verifying": "等待智能体就绪"
+        "verifying": "等待智能体就绪",
+        "admin_workspace": "准备管理 PG Workspace",
+        "business_workspace": "准备业务 PG Workspace",
+        "admin_database": "初始化共享管理库"
       },
-      "back": "继续创建"
+      "back": "继续创建",
+      "pgAutoDescription": "使用 VeADK 部署账号自动创建或复用两个 PG Workspace：mpa_admin_workspace / mpa_admin_db 存放共享资源记录，业务 Workspace 供多个智能体共用，每个智能体拥有独立业务库。无需填写 PG 连接信息，提交创建后开始准备。",
+      "pgModeChanged": "此创建任务使用旧的 PG 配置，不能直接切换为自动模式重试。请联系管理员确认已有资源和任务后重新创建。",
+      "pgMigrationRequired": "检测到旧共享注册库。请先将共享资源记录迁移到 mpa_admin_workspace / mpa_admin_db，并完成现有 Runtime 的注册库地址切换；完成后点击“重新检查”。"
     }
   },
   "skillCenter": {

@@ -10,6 +10,10 @@ export interface MpaCreationInput {
   region: string;
   runtimeImage?: string;
   workerImage?: string;
+  pgHost?: string;
+  pgPort?: string;
+  openvikingUrl?: string;
+  openvikingResourceId?: string;
 }
 export interface MpaCreationTask extends MpaCreationInput {
   taskId: string;
@@ -29,7 +33,25 @@ export interface MpaCreationConfig {
   error?: string;
   runtimeImage?: string;
   workerImage?: string;
+  pgHost?: string;
+  pgPort?: string;
+  postgresMode?: "auto";
+  postgresMigrationRequired?: boolean;
+  postgresLayout?: "split-workspaces";
+  adminWorkspaceName?: string;
+  adminDatabaseName?: string;
 }
+
+export class MpaCreationRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MpaCreationRequestError";
+  }
+}
+
 async function request<T>(
   path: string,
   signal: AbortSignal,
@@ -45,7 +67,8 @@ async function request<T>(
   });
   if (!response.ok) {
     const value = await response.json().catch(() => ({}));
-    throw new Error(
+    throw new MpaCreationRequestError(
+      response.status,
       typeof value.detail === "string"
         ? value.detail
         : `HTTP ${response.status}`,

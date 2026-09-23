@@ -2,6 +2,8 @@
 
 [English](2026-09-21-deployment-account-pg.md)
 
+> 2026-09-23 当前创建流程已由[手动预建两个 PG Workspace](../mpa-space-scoped-resources/2026-09-23-two-pg-workspaces.zh.md)方案替代：一个管理 Workspace，另一个共享业务 Workspace 内按智能体分库。下文自动创建/每智能体独立 Workspace 设计仅保留历史记录，本次不实施。
+
 ## 元信息
 
 - Change ID：`mpa-serverless-pg`

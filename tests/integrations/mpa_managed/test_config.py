@@ -3,7 +3,11 @@
 import pytest
 import yaml
 
-from veadk.integrations.mpa.managed.config import load_profile, ConfigurationError
+from veadk.integrations.mpa.managed.config import (
+    load_profile,
+    with_creation_resources,
+    ConfigurationError,
+)
 
 
 def profile_file(tmp_path, monkeypatch, **managed):
@@ -30,6 +34,115 @@ def test_summary_contains_no_secrets(tmp_path, monkeypatch):
     assert profile.region == "cn-beijing"
     assert "fake" not in str(profile.summary())
     assert "postgresql" not in str(profile.summary())
+    assert profile.summary()["pgHost"] == "db"
+    assert profile.summary()["pgPort"] == "5432"
+
+
+def split_profile_file(tmp_path, monkeypatch):
+    path = profile_file(
+        tmp_path,
+        monkeypatch,
+        postgres={
+            "admin-workspace-id": "ws-management",
+            "business-workspace-id": "ws-business",
+            "admin-database-url-env": "TEST_REGISTRY_ADMIN",
+        },
+    )
+    monkeypatch.setenv("TEST_MPA_ADMIN", "postgresql://app:fake@business/aidb")
+    monkeypatch.setenv(
+        "TEST_MPA_REGISTRY", "postgresql://registry:fake@management/mpa_admin_db"
+    )
+    monkeypatch.setenv("TEST_REGISTRY_ADMIN", "postgresql://owner:fake@management/aidb")
+    return path
+
+
+def test_two_workspaces_keep_business_defaults_and_safe_management_summary(
+    tmp_path, monkeypatch
+):
+    path = split_profile_file(tmp_path, monkeypatch)
+    profile = load_profile(path)
+    assert profile.summary()["pgHost"] == "business"
+    assert profile.summary()["postgresLayout"] == "split-workspaces"
+    assert profile.summary()["adminWorkspaceName"] == "mpa_admin_workspace"
+    assert profile.summary()["adminDatabaseName"] == "mpa_admin_db"
+    assert "fake" not in str(profile.summary())
+    # The powerful management maintenance credential is unnecessary at runtime.
+    monkeypatch.delenv("TEST_REGISTRY_ADMIN")
+    assert load_profile(path).summary() == profile.summary()
+
+
+@pytest.mark.parametrize(
+    "change", ["same-workspace", "same-host", "wrong-name", "wrong-database"]
+)
+def test_two_workspaces_reject_invalid_boundaries(tmp_path, monkeypatch, change):
+    path = split_profile_file(tmp_path, monkeypatch)
+    data = yaml.safe_load(path.read_text())
+    if change == "same-workspace":
+        data["managed"]["postgres"]["business-workspace-id"] = "ws-management"
+    elif change == "wrong-name":
+        data["managed"]["postgres"]["admin-workspace-name"] = "wrong"
+    elif change == "same-host":
+        monkeypatch.setenv(
+            "TEST_MPA_REGISTRY", "postgresql://registry:fake@BUSINESS/mpa_admin_db"
+        )
+    else:
+        monkeypatch.setenv(
+            "TEST_MPA_REGISTRY", "postgresql://registry:fake@management/old_registry"
+        )
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigurationError) as error:
+        load_profile(path)
+    assert "fake" not in str(error.value)
+
+
+def test_creation_resources_override_runtime_environment_without_changing_profile(
+    tmp_path, monkeypatch
+):
+    profile = load_profile(profile_file(tmp_path, monkeypatch))
+    selected = with_creation_resources(
+        profile,
+        {
+            "pgHost": "db",
+            "pgPort": "5432",
+            "openvikingUrl": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+            "openvikingResourceId": "ov-example",
+        },
+    )
+    assert selected.managed.runtime.env == {
+        "PGHOST": "db",
+        "PGPORT": "5432",
+        "OPENVIKING_URL": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+        "OPENVIKING_RESOURCE_ID": "ov-example",
+    }
+    assert profile.managed.runtime.env == {}
+    assert "fake" not in str(selected.managed.runtime.env)
+
+    changed_url = with_creation_resources(
+        profile,
+        {
+            "openvikingUrl": "https://new.example.test/openviking",
+        },
+    )
+    assert changed_url.managed.runtime.env["OPENVIKING_RESOURCE_ID"] == ""
+
+
+@pytest.mark.parametrize(
+    "resources",
+    [
+        {"pgHost": "different.example", "pgPort": "5432"},
+        {"pgHost": "db", "pgPort": "5433"},
+        {"openvikingUrl": "http://example.test/openviking"},
+        {"openvikingUrl": "https://example.test:443/openviking"},
+        {"openvikingUrl": "https://user:private@example.test/openviking"},
+        {"openvikingResourceId": "ov-example"},
+    ],
+)
+def test_creation_resources_reject_unsafe_or_incompatible_values(
+    tmp_path, monkeypatch, resources
+):
+    profile = load_profile(profile_file(tmp_path, monkeypatch))
+    with pytest.raises(ConfigurationError):
+        with_creation_resources(profile, resources)
 
 
 def test_invalid_profile_and_missing_secret_are_safe(tmp_path, monkeypatch):

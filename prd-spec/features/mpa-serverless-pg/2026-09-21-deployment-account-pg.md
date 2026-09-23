@@ -2,6 +2,8 @@
 
 [中文版](2026-09-21-deployment-account-pg.zh.md)
 
+> Superseded on 2026-09-23 for the current creation flow by [two manually prepared PG Workspaces](../mpa-space-scoped-resources/2026-09-23-two-pg-workspaces.md): one management Workspace and one shared business Workspace with per-agent databases. The automatic/per-agent Workspace design below is historical and is not being implemented.
+
 ## Metadata
 
 - Change ID: `mpa-serverless-pg`

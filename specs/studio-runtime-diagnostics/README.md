@@ -54,3 +54,5 @@ Non-A2A agents and A2A agents without model capabilities retain the existing Com
 CON-8/CON-11 correction (implemented): preserve distinct outer text and reasoning after sandbox completion. Deduplicate only exact complete answer parts in the bridge; MPA grouped view may hide exact answer mirrors without mutating source turns and restores an extended fragment intact. General Codex tool behavior is restored. See [preserve follow-up](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-preserve-followup-content.md).
 
 - [MPA reasoning snapshot normalization](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-reasoning-snapshots.md).
+
+- `CON-12`: Only MPA A2A restores the trusted control-plane endpoint prefix `/runtime/[a-z0-9-]+` for a same-origin default `/a2a/jsonrpc` card URL. Already-prefixed URLs, other paths, cross-origin URLs, query/fragment/userinfo are not rewritten. Sending and history restoration use the same resolved address; general agents remain unchanged. See [A2A discovery fix](../../prd-spec/bugfixes/2026-09-23-mpa-a2a-discovery-default.md).

@@ -429,6 +429,9 @@ def test_runner_scope_covers_async_worker_events(monkeypatch, capsys):
         ),
     )
     monkeypatch.setattr(runner, "with_creation_images", lambda profile, images: profile)
+    monkeypatch.setattr(
+        runner, "with_creation_resources", lambda profile, resources: profile
+    )
     monkeypatch.setattr(runner, "provision", provision)
     monkeypatch.setattr(diagnostics.asyncio, "sleep", AsyncMock())
     assert runner.main() == 1

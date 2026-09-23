@@ -28,7 +28,7 @@
 - `CON-5`：调用方显式提供的 `extra_env` 继续保持 last-wins，包括有意覆盖 VeADK 配置默认值。
 - `CON-6`：AgentKit Runtime 创建及收敛更新必须持久化 `veadk:agent-type=mpa`，作为 Studio 稳定分类标签。未打标签 Runtime 在执行显式标签修复前不进入 MPA 筛选。
 - `CON-7`：在其他创建副作用之前，CLI 创建或复用账号和地域范围内的 `agentkit-studio-workload` Pool 与 `{MPA_AGENT_ID}-studio` Identity，然后以 `MPA_WORKLOAD_POOL_NAME` 和 `MPA_WORKLOAD_IDENTITY_NAME` 注入 Runtime。
-- `CON-8`：`veadk mpa create` 自动生成和显式接收的 ID 均匹配 `mi-[0-9a-z]{12}`。基础 ID 仍作为 Runtime 和元数据身份，只有 WorkloadIdentity 增加 `-studio` 后缀。
+- `CON-8`：`veadk mpa create` 继续自动生成 `mi-[0-9a-z]{12}` ID。显式 ID 接受该格式及 Studio 原有的 `mi-[0-9a-z]{24}` 格式，以兼容托管平铺创建。基础 ID 仍作为 Runtime 和元数据身份，只有 WorkloadIdentity 增加 `-studio` 后缀。
 - `CON-9`：工作负载资源按精确名称幂等 get-or-create。并发创建冲突后重新读取；其他 Identity 错误在 Tool、数据库或 Runtime 修改前失败。已创建的身份资源保留供重试。
 
 ## 状态、安全与兼容
@@ -48,7 +48,7 @@
 | `CON-7`、`CON-9` | `uv run --extra dev pytest tests/integrations/test_mpa_identity.py tests/cli/test_cli_mpa.py` |
 | 端到端 | 创建/复用隔离 Runtime，不打印 Key 地检查 metadata，调用 A2A 和内置 MCP，并观察两个 MCP 缓存周期 |
 
-VeADK MPA 部署默认设置 DISABLE_JWT_AUTH=true。extra_env 显式配置优先，包括 false。网关鉴权及其他部署路径不变。
+VeADK MPA 部署默认设置 ENABLE_A2A=true 和 DISABLE_JWT_AUTH=false。没有 ADK 用户 JWT 时，兼容的 MPA Runtime 对 /list-apps 返回 404，Studio 因而发现其 A2A card 并选择 a2a-default。A2A_TIP_VERIFY_ENABLED=false 保留现有网关 key-auth 集成。显式 extra_env 仍最后覆盖。Managed flat 创建使用这些默认值；引用 Runtime / 模板的环境保持不变。已有 Runtime 需要显式更新。通用智能体不受影响。
 
 MPA 部署默认注入 `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`，关闭数据库自动埋点并保留业务链路。显式 `extra_env` 优先，包括传空字符串重新启用埋点。适用于新部署或显式重新部署的资源，不自动修改已有运行实例。
 
@@ -72,3 +72,7 @@ Studio/CLI 通过共享编排遵循相同保证。平台 operation 清单与 boo
 `CON-7` 至 `CON-12` 验证映射 PRD `AC-1`、`AC-2`、`AC-9`、`AC-10`：阻断旧端点的全新启动、缺失配置/finalization 失败/重启、不安全 override、轮换/重试、兼容回滚、活动/共享资源删除。复用上述 provisioning 回归并为新 profile 增加失败测试。拟议 runtime/live 结果均为 `not_run`。
 
 2026-09-15：新增无历史导入的功能迁移 profile 草案，实现与真实证据待补。
+
+### 自动准备 PG
+
+托管部署支持 `managed.postgres.mode: auto`。AIDAP 调用前核验部署 STS 身份，在网络/APIG/Runtime 部署前准备两个共享 Workspace 和管理库，并使用解析的业务连接覆盖继承的 PG 地址/端口/用户名/密码/TLS 配置。智能体业务库命名及现有账号/地域网络/APIG 共享契约不变。引导状态、迁移保护和 API 行为由 [Studio 创建 CON-13](../studio-mpa-creation/README.zh.md#con-13自动准备共享-postgresql-workspace) 定义。自动模式显式启用，保留手动/旧配置兼容性。

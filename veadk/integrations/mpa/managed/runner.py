@@ -4,7 +4,7 @@ import asyncio
 import json
 import sys
 
-from .config import load_profile, with_creation_images
+from .config import load_profile, with_creation_images, with_creation_resources
 from .service import provision
 from .diagnostics import classify_error, diagnostic_scope, report
 
@@ -23,6 +23,7 @@ def run():
         data = json.loads(sys.stdin.read(16384))
         profile = load_profile(data["config"], region=data["region"])
         profile = with_creation_images(profile, data.get("images", {}))
+        profile = with_creation_resources(profile, data.get("resources", {}))
         result = asyncio.run(
             asyncio.wait_for(
                 provision(

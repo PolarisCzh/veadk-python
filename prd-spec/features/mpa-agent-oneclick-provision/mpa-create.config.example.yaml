@@ -22,14 +22,10 @@ registry-name: agentkit-platform-<account>
 # account-id: "<expected-account>"
 region: cn-beijing
 
-# --- PostgreSQL (external, pre-created) ---
-pg-host: cp-xxxx.pg7.aidap-global.cn-beijing.volces.com
-pg-port: "5432"
-pg-database: mpa
-pg-user: mpa
-pg-password: "<pg-password>"
-pg-sslmode: require
-pg-channel-binding: require
+# --- PostgreSQL ---
+# Managed auto mode obtains both Workspace connections using deployment STS.
+# No PG credentials are required here. Legacy `mpa create` / manual profiles
+# still require pg-host, pg-port, pg-user, pg-password, pg-sslmode, etc.
 
 # --- model ---
 model-provider: openai
@@ -60,15 +56,28 @@ runtime-role-name: IDRoleForArkClawShareAgent
 # feishu-app-secret: "<feishu-app-secret>"
 
 # --- managed provisioning (used by `mpa provision` and Studio) ---
-# Pre-create a PostgreSQL instance, shared registry database, PG login/owner,
-# Runtime/worker IAM roles, and model access. Database admin needs CREATEDB.
-# Both PG URLs must be set in the Studio/CLI process environment; never commit
-# values. Example shape: postgresql+asyncpg://USER:PASSWORD@HOST/REGISTRY?ssl=require
-# The registry must use direct/session pooling, not transaction pooling.
+# Prepare deployment STS with AIDAP permissions, Runtime/worker IAM roles and model access.
+# Auto mode allocates cloud resources only after an explicit creation submission.
+# Keep one durable bootstrap state path for all Studio/CLI creation processes.
 managed:
   version: 1
-  database-admin-url-env: DEPLOYMENT_DATABASE_ADMIN_URL
-  shared-database-url-env: SHARED_APIG_DATABASE_URL
+  postgres:
+    mode: auto
+    admin-workspace-name: mpa_admin_workspace
+    business-workspace-name: mpa_business_workspace
+    project-name: default
+    bootstrap-path: .adk/mpa-pg-bootstrap.sqlite3
+    timeout-seconds: 600
+    # Optional existing Workspace IDs. Scope/name/engine are validated before use.
+    # admin-workspace-id: existing-management-workspace-id
+    # business-workspace-id: existing-business-workspace-id
+  # Existing installations: stop registry writers and migrate before clearing
+  # SHARED_APIG_DATABASE_URL. Preserve the existing business Workspace ID/name.
+  # veadk mpa init-admin-db --config mpa-create.config.yaml --source-url-env OLD_SHARED_APIG_DATABASE_URL
+  # Follow managed/README.md for coordinated Runtime registry endpoint cutover.
+  # Manual compatibility: mode: manual requires both IDs, business PG fields,
+  # DEPLOYMENT_DATABASE_ADMIN_URL and SHARED_APIG_DATABASE_URL. The latter must
+  # target mpa_admin_db. MPA_ADMIN_DATABASE_ADMIN_URL is used only for manual init.
   # Optional rotating deployment STS file. Otherwise use the existing
   # VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY / VOLCENGINE_SESSION_TOKEN env.
   # credential-file: /var/run/secrets/iam/credential
@@ -77,7 +86,7 @@ managed:
   # from-runtime: r-reference
   # template-file: /secure/runtime-template.json
   # Reference mode does not inherit the source agent's channels or Skill Space.
-  # Business database names are derived per agent; pg-database above is legacy-only.
+  # Business database names are derived per agent; pg-database is legacy-only.
 
   # Optional explicit MPA image, overriding any of the three template sources.
   # Omit runtime to retain the source image. Other prerequisites remain required.

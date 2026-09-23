@@ -89,7 +89,7 @@ def derive_claw_space_id(claw_space_id: str | None, *, account_id: str) -> str:
 # Mirror arkclaw-team GenerateTemplateID: lowercase alnum, fixed-length suffix.
 _ID_CHARSET = "abcdefghijklmnopqrstuvwxyz0123456789"
 _ID_SUFFIX_LENGTH = 12
-_MPA_AGENT_ID_RE = re.compile(r"^mi-[a-z0-9]{12}$")
+_MPA_AGENT_ID_RE = re.compile(r"^mi-(?:[a-z0-9]{12}|[a-z0-9]{24})$")
 STUDIO_WORKLOAD_POOL_NAME = "agentkit-studio-workload"
 
 
@@ -107,7 +107,7 @@ def validate_mpa_agent_id(value: str) -> str:
     """Return a canonical MPA id or reject it before provisioning side effects."""
     agent_id = (value or "").strip()
     if not _MPA_AGENT_ID_RE.fullmatch(agent_id):
-        raise ValueError("MPA_AGENT_ID must match mi-[0-9a-z]{12}")
+        raise ValueError("MPA_AGENT_ID must match mi-[0-9a-z]{12} or mi-[0-9a-z]{24}")
     return agent_id
 
 
@@ -182,7 +182,10 @@ def build_runtime_env(
         "SCHEDULED_TASK_BACKEND": "postgresql",
         # Identity adaptation (FR-10): no arkclaw identity pools in this scenario.
         "IDENTITY_STARTUP_ENABLED": "false",
-        "DISABLE_JWT_AUTH": "true",
+        # Advertise A2A to Studio's Runtime-key discovery probe. REST endpoints
+        # require a user JWT; bypassing that gate incorrectly advertises ADK.
+        "DISABLE_JWT_AUTH": "false",
+        "ENABLE_A2A": "true",
         "MPA_LAZY_LOGIN": "false",
         # VeADK uses external resources and only retains CLAW_SPACE_ID as a
         # compatibility identifier. It must not query the ArkClaw registry.

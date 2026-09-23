@@ -16,7 +16,10 @@ from tests.integrations.mpa_managed.test_agent_deployment import (
 
 @pytest.mark.parametrize("source", ["reference", "template", "flat"])
 @pytest.mark.parametrize("image", [None, "registry.example/mpa:pinned"])
-def test_network_gateway_worker_precede_runtime(monkeypatch, source, image):
+@pytest.mark.parametrize("split_workspaces", [False, True])
+def test_network_gateway_worker_precede_runtime(
+    monkeypatch, source, image, split_workspaces
+):
     async def run():
         entry = Registry()
         cloud = Cloud(entry)
@@ -26,7 +29,7 @@ def test_network_gateway_worker_precede_runtime(monkeypatch, source, image):
             values={},
             template=template(),
             admin_url="fake",
-            shared_url="shared",
+            shared_url="postgresql://registry.example/shared",
             managed=Managed(
                 version=1,
                 runtime=Runtime(),
@@ -35,6 +38,14 @@ def test_network_gateway_worker_precede_runtime(monkeypatch, source, image):
             ),
         )
         profile.managed.runtime.image = image
+        if split_workspaces:
+            from veadk.integrations.mpa.managed.config import PostgresWorkspaces
+
+            profile.managed.postgres = PostgresWorkspaces(
+                admin_workspace_id="ws-admin", business_workspace_id="ws-business"
+            )
+            profile.admin_url = "postgresql://app:fake@pg.example/aidb"
+            profile.shared_url = "postgresql://registry:fake@management/mpa_admin_db"
         if source == "reference":
             profile.managed.from_runtime = "r-source"
             cloud.runtimes["r-source"] = template()
@@ -81,16 +92,131 @@ def test_network_gateway_worker_precede_runtime(monkeypatch, source, image):
             assert request["ArtifactUrl"] == (image or "registry/image:v1")
             if image:
                 assert request["ArtifactType"] == "image"
+            if source == "flat":
+                runtime_env = service.env_map(request)
+                assert runtime_env["DISABLE_JWT_AUTH"] == "false"
+                assert runtime_env["ENABLE_A2A"] == "true"
+                assert runtime_env["A2A_TIP_VERIFY_ENABLED"] == "false"
+                assert (
+                    request["AuthorizerConfiguration"]["AuthorizerType"] == "key_auth"
+                )
+            if split_workspaces:
+                runtime_env = service.env_map(request)
+                assert runtime_env["SHARED_APIG_DATABASE_URL"] == profile.shared_url
+                assert runtime_env["PGDATABASE"].startswith("mpa_agent_")
             return await cloud_create(request)
 
         cloud.create = create
-        result = await service.provision(profile, agent_id="agent", owner="user-a")
+        result = await service.provision(
+            profile, agent_id="mi-123456789abc", owner="user-a"
+        )
         assert result["runtime_id"] == "r-agent"
         assert result["gateway_id"] == "gw-one"
+        if split_workspaces:
+            assert entry.row["admin_workspace_id"] == "ws-admin"
+            assert entry.row["business_workspace_id"] == "ws-business"
+            assert profile.managed.postgres is not None
+            profile.managed.postgres.business_workspace_id = "ws-other"
+            with pytest.raises(DeploymentError, match="Workspace"):
+                await service.provision(
+                    profile, agent_id="mi-123456789abc", owner="user-a"
+                )
         with pytest.raises(DeploymentError, match="owner"):
-            await service.provision(profile, agent_id="agent", owner="user-b")
+            await service.provision(profile, agent_id="mi-123456789abc", owner="user-b")
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        {"admin_workspace_id": "ws-other"},
+        {"business_workspace_id": "ws-other"},
+        {"database_host": "old-business"},
+        {"database_port": 6543},
+    ],
+)
+def test_retry_does_not_rebind_existing_database(tmp_path, monkeypatch, existing):
+    from veadk.integrations.mpa.managed.config import load_profile
+    from tests.integrations.mpa_managed.test_config import split_profile_file
+
+    profile = load_profile(split_profile_file(tmp_path, monkeypatch))
+    record = dict(existing)
+    with pytest.raises(DeploymentError):
+        service.bind_postgres_workspaces(profile, record)
+    assert record == existing
+
+
+def test_verified_legacy_binding_preserves_database_identity(tmp_path, monkeypatch):
+    from veadk.integrations.mpa.managed.config import load_profile
+    from tests.integrations.mpa_managed.test_config import split_profile_file
+
+    profile = load_profile(split_profile_file(tmp_path, monkeypatch))
+    record = {
+        "database_host": "business",
+        "database_port": 5432,
+        "database_name": "mpa_agent_existing",
+    }
+    service.bind_postgres_workspaces(profile, record)
+    assert record["database_name"] == "mpa_agent_existing"
+    assert record["business_workspace_id"] == "ws-business"
+    profile.managed.postgres = None
+    with pytest.raises(DeploymentError):
+        service.bind_postgres_workspaces(profile, record)
+
+
+def test_two_agents_use_one_business_workspace_and_one_management_registry(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.config import load_profile
+    from tests.integrations.mpa_managed.test_config import split_profile_file
+
+    profile = load_profile(split_profile_file(tmp_path, monkeypatch))
+    profile.managed.from_runtime = ""
+    profile.template = template()
+    for item in profile.template["Envs"]:
+        if item["Key"] == "PGHOST":
+            item["Value"] = "business"
+    profile.template["Envs"].append(
+        {"Key": "TEST_REGISTRY_ADMIN", "Value": "must-not-reach-runtime"}
+    )
+    environments = []
+    urls = []
+
+    async def run():
+        for agent_id in ("mi-one", "mi-two"):
+            registry = Registry()
+            cloud = Cloud(registry)
+            monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+
+            def registry_factory(url):
+                urls.append(url)
+                return registry
+
+            def databases_factory(**kwargs):
+                assert kwargs["admin_url"] == profile.admin_url
+                assert kwargs["runtime_env"]["PGHOST"] == "business"
+                assert "TEST_REGISTRY_ADMIN" not in kwargs["runtime_env"]
+                return Databases()
+
+            monkeypatch.setattr(service, "AgentDeploymentRegistry", registry_factory)
+            monkeypatch.setattr(service, "AgentDatabaseProvisioner", databases_factory)
+            gateway = AsyncMock()
+            gateway.ensure.return_value = {"gateway_id": "gw-shared"}
+            monkeypatch.setattr(service, "SharedAPIGService", lambda **kw: gateway)
+            monkeypatch.setattr(
+                service, "ensure_worker", AsyncMock(return_value="t-one")
+            )
+            await service.provision(profile, agent_id=agent_id, owner="user")
+            environments.append(service.env_map(cloud.creates[0]))
+
+    asyncio.run(run())
+    assert urls == [profile.shared_url, profile.shared_url]
+    assert {env["PGHOST"] for env in environments} == {"business"}
+    assert len({env["PGDATABASE"] for env in environments}) == 2
+    assert {env["SHARED_APIG_DATABASE_URL"] for env in environments} == {
+        profile.shared_url
+    }
 
 
 def test_database_preflight_failure_prevents_network_and_gateway_mutations(monkeypatch):
