@@ -29,6 +29,8 @@ from typing import Any
 
 import click
 
+from veadk.cli.cli_mpa_admin import init_admin_db
+
 from veadk.integrations.mpa.mpa_identity import (
     MpaIdentityError,
     ensure_studio_workload_identity,
@@ -227,6 +229,8 @@ def mpa() -> None:
 
 
 mpa.add_command(control)
+
+mpa.add_command(init_admin_db)
 
 
 @mpa.command("provision")

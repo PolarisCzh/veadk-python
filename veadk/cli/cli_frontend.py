@@ -10870,6 +10870,8 @@ def _run_frontend_server(
     async def _runtime_a2a_agent_card(
         endpoint: str,
         headers: dict[str, str],
+        *,
+        is_mpa: bool = False,
     ) -> dict[str, Any] | None:
         """Return an A2A Agent Card when a Runtime is A2A-only, else None."""
 
@@ -10893,6 +10895,10 @@ def _run_frontend_server(
             card_url = str(payload.get("url") or "").strip()
             if not card_url:
                 return None
+            if is_mpa:
+                from frontend.server.mpa_a2a import mpa_a2a_rpc_url
+
+                payload["url"] = mpa_a2a_rpc_url(endpoint, card_url)
             return payload
         except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError):
             return None
@@ -10922,11 +10928,12 @@ def _run_frontend_server(
         user_id: str,
         endpoint: str,
         headers: dict[str, str],
+        is_mpa: bool = False,
     ) -> dict[str, Any]:
         task_id = _a2a_task_by_session.get((region, runtime_id, user_id, session_id))
         if not task_id:
             return _runtime_a2a_session(session_id, user_id)
-        card = await _runtime_a2a_agent_card(endpoint, headers)
+        card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=is_mpa)
         if card is None:
             return _runtime_a2a_session(session_id, user_id)
         rpc_payload = {
@@ -12105,7 +12112,7 @@ def _run_frontend_server(
             path == f"web/agent-info/{_RUNTIME_A2A_VIRTUAL_APP}"
             or (is_mpa and path.startswith("web/agent-info/") and path.count("/") == 2)
         ):
-            a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=is_mpa)
             if a2a_card is not None or is_mpa:
                 mpa_info = None
                 if is_mpa:
@@ -12229,6 +12236,7 @@ def _run_frontend_server(
                         user_id=user_id,
                         endpoint=endpoint,
                         headers=headers,
+                        is_mpa=is_mpa,
                     )
                 )
         run_sse_activity: RunSseActivity | None = None
@@ -12588,7 +12596,7 @@ def _run_frontend_server(
             and run_sse_payload is not None
             and str(run_sse_payload.get("app_name") or "") == _RUNTIME_A2A_VIRTUAL_APP
         ):
-            a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=is_mpa)
             if a2a_card is None:
                 raise HTTPException(status_code=404, detail="runtime_a2a_not_found")
             return StreamingResponse(
@@ -12869,7 +12877,9 @@ def _run_frontend_server(
             ):
                 await upstream.aclose()
                 await client.aclose()
-                a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
+                a2a_card = await _runtime_a2a_agent_card(
+                    endpoint, headers, is_mpa=is_mpa
+                )
                 if a2a_card is not None:
                     return JSONResponse([_RUNTIME_A2A_VIRTUAL_APP])
             logger.warning(

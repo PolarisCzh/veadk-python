@@ -1594,6 +1594,28 @@
     },
     "wakingHint": "Waking the agent. This may take some time.",
     "mpaCreate": {
+      "stepsLabel": "Creation steps",
+      "steps": {
+        "basics": "Basics",
+        "postgres": "PostgreSQL",
+        "openviking": "OpenViking",
+        "autoPostgres": "Database"
+      },
+      "next": "Next",
+      "previousStep": "Previous",
+      "pgDescription": "Choose an existing PostgreSQL instance. Creation prepares an isolated database for this agent on that instance.",
+      "pgSplitDescription": "Use the configured business PG Workspace. Agents share this Workspace, each with its own database. Shared resource records are stored separately in mpa_admin_workspace / mpa_admin_db, configured by the administrator.",
+      "pgConsole": "Create or inspect an AIDAP PG Workspace in Volcengine",
+      "pgHost": "PG host",
+      "pgPort": "PG port",
+      "pgInvalid": "Enter a valid PG host and port.",
+      "pgCredentials": "The deployment service provides the PG login and password; host and port must match its configuration.",
+      "openvikingDescription": "Optional. Enter a service URL and resource ID for the new agent.",
+      "openvikingConsole": "Inspect OpenViking resources in Volcengine",
+      "openvikingUrl": "OpenViking service URL",
+      "openvikingResourceId": "OpenViking resource ID",
+      "openvikingInvalid": "Enter a valid HTTPS service URL and resource ID.",
+      "openvikingCredentials": "The deployment service provides the OpenViking API key. Leave blank to keep the current configuration.",
       "runtimeImage": "MPA image",
       "workerImage": "Worker image",
       "imageDefault": "Leave blank to use the configured image",
@@ -1641,9 +1663,15 @@
         "skills": "Preparing Skill Space",
         "worker": "Preparing worker",
         "deploying": "Preparing database, skills and Runtime",
-        "verifying": "Waiting for agent readiness"
+        "verifying": "Waiting for agent readiness",
+        "admin_workspace": "Prepare management PG Workspace",
+        "business_workspace": "Prepare business PG Workspace",
+        "admin_database": "Initialize shared management database"
       },
-      "back": "Keep creating"
+      "back": "Keep creating",
+      "pgAutoDescription": "VeADK uses its deployment account to create or reuse two PG Workspaces. mpa_admin_workspace / mpa_admin_db stores shared resource records; the business Workspace hosts an independent database for each agent. No PG connection input is needed. Preparation starts after submission.",
+      "pgModeChanged": "This submitted task uses previous PG settings and cannot be retried in automatic mode. Ask an administrator to reconcile its resources and task before starting a new creation.",
+      "pgMigrationRequired": "An existing shared registry is configured. Migrate its resource records to mpa_admin_workspace / mpa_admin_db and coordinate the registry URL cutover for existing Runtimes, then recheck this configuration."
     }
   },
   "skillCenter": {

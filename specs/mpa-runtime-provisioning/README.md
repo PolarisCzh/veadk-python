@@ -28,7 +28,7 @@ This component converts `veadk mpa create` inputs into one recoverable AgentKit 
 - `CON-5`: Explicit caller `extra_env` remains last-wins, including an intentional override of VeADK profile defaults.
 - `CON-6`: AgentKit Runtime create and convergent update persist `veadk:agent-type=mpa` as the stable Studio classification tag. Untagged Runtime resources remain outside the MPA filter until an explicit tag repair is performed.
 - `CON-7`: Before other provisioning mutations, the CLI creates or reuses the account-and-region scoped pool `agentkit-studio-workload` and identity `{MPA_AGENT_ID}-studio`, then injects them as `MPA_WORKLOAD_POOL_NAME` and `MPA_WORKLOAD_IDENTITY_NAME`.
-- `CON-8`: Generated and explicit ids accepted by `veadk mpa create` match `mi-[0-9a-z]{12}`. The base id remains the Runtime and metadata identity; only the workload identity receives the `-studio` suffix.
+- `CON-8`: `veadk mpa create` continues to generate `mi-[0-9a-z]{12}` ids. Explicit ids accept that form and the existing Studio `mi-[0-9a-z]{24}` form for flat managed provisioning. The base id remains the Runtime and metadata identity; only the workload identity receives the `-studio` suffix.
 - `CON-9`: Workload get-or-create is exact-name idempotent. Concurrent create conflicts are followed by a read. Other Identity errors fail before Tool, database, or Runtime mutations. Created identity resources are retained for retry.
 
 ## State, security, and compatibility
@@ -48,7 +48,7 @@ Missing endpoint, key, Runtime ID, or APIG ID blocks metadata finalization. Runt
 | `CON-7`, `CON-9` | `uv run --extra dev pytest tests/integrations/test_mpa_identity.py tests/cli/test_cli_mpa.py` |
 | End-to-end | Create/reuse an isolated Runtime, inspect metadata without printing keys, invoke A2A and built-in MCP, and observe two MCP-cache intervals |
 
-VeADK MPA provisioning defaults DISABLE_JWT_AUTH to true. Explicit extra_env values override this default, including false. Gateway authentication and other deployment paths are unchanged.
+VeADK MPA provisioning defaults to ENABLE_A2A=true and DISABLE_JWT_AUTH=false. Without an ADK user JWT, a compatible MPA Runtime returns 404 from /list-apps so Studio discovers its A2A card and selects a2a-default. A2A_TIP_VERIFY_ENABLED=false retains the existing gateway key-auth integration. Explicit extra_env values remain last-wins. Managed flat creation uses these defaults; referenced Runtime/template environments are preserved. Existing Runtimes require an explicit update. General agents are unchanged.
 
 MPA provisioning defaults `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` to `sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`, suppressing database auto-instrumentation while preserving business tracing. Explicit `extra_env` overrides win, including an empty string to re-enable instrumentation. This applies to newly provisioned or explicitly redeployed resources, not existing running instances.
 
@@ -72,3 +72,7 @@ These guarantees apply to both Studio and CLI through shared orchestration. The 
 Verification maps `CON-7` through `CON-12` to PRD `AC-1`, `AC-2`, `AC-9`, `AC-10`: fresh bootstrap with legacy endpoints blocked; missing/finalization failure and restart; unsafe overrides; credential rotation/retry; compatible rollback; active/shared-resource deletion. Reuse existing provisioning regression targets above and add failing tests for the new profile. All proposed runtime/live results are `not_run`.
 
 2026-09-15: profile drafted for functional migration without historical data import; implementation and live evidence pending.
+
+### Automatic PG preparation
+
+Managed provisioning supports `managed.postgres.mode: auto`. It verifies deployment STS identity before AIDAP calls, prepares the two shared Workspaces and management database before network/APIG/Runtime provisioning, and overrides inherited PG host/port/user/password/TLS values with the resolved business connection. Agent database names and the existing account/region network/APIG sharing contract are unchanged. The bootstrap state, migration guards and API behavior are owned by [Studio creation CON-13](../studio-mpa-creation/README.md#con-13-automatic-shared-postgresql-workspaces). Automatic mode is opt-in; manual/legacy profiles are preserved.

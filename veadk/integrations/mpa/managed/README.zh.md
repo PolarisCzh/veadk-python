@@ -4,7 +4,42 @@
 
 VeADK 可准备 MPA 前置资源并部署智能体，无需检出 `agentkit-mpa-agent` 源码。Studio 和 `veadk mpa provision` 共用同一实现。部署的 MPA 镜像须支持账号共享 APIG 注册和元数据初始化。
 
-## 服务端配置
+## 自动准备 PG（新部署推荐）
+
+在私有 YAML 中设置 `managed.postgres.mode: auto`；示例默认使用此模式。不需要 PG 地址/用户名/密码或 PG URL 环境变量。部署账号的轮转 STS 凭据除已有 AgentKit/VPC/APIG 权限及模型/角色配置外，还需 `GetCallerIdentity`、AIDAP `CreateWorkspace`、`DescribeWorkspaces`、`DescribeWorkspaceDetail`、`DescribeBranches`、`DescribeComputes`、`DescribeWorkspaceEndpoint`、`DescribeDBAccounts`、`DescribeDatabases` 和 `DescribeDBAccountConnection` 权限。账号须已开通 AIDAP，且 Studio、Runtime 能连接返回的 PostgreSQL 端点。该流程使用服务商公网端点，不修改数据库网络/白名单设置。
+
+```yaml
+managed:
+  version: 1
+  postgres:
+    mode: auto
+    admin-workspace-name: mpa_admin_workspace
+    business-workspace-name: mpa_business_workspace
+    project-name: default
+    bootstrap-path: .adk/mpa-pg-bootstrap.sqlite3
+    timeout-seconds: 600
+  # 保留已有 runtime、worker 和 network 配置。
+```
+
+提交创建后，准备/复用 `mpa_admin_workspace/mpa_admin_db`，再准备一个业务 Workspace，每个 MPA 使用独立 `mpa_agent_<hash>` 业务库。创建页 PG 步骤展示说明，不再提供连接信息输入框。连接信息在服务端获取；自动模式忽略或覆盖平铺/模板/参考 Runtime 中的 PG 设置。可用 `admin-workspace-id` / `business-workspace-id` 接管已有资源，范围/名称/引擎须一致。默认引擎为 PostgreSQL_17。配置检查和 dry-run 不分配云资源。
+
+同一范围的所有 Studio/CLI 进程必须使用**同一协调主机上的同一持久引导文件路径**，重启和重新部署时须保留。私有 SQLite 文件仅保存意图和 ID，不保存密码。任务取消/失败保留资源。创建响应丢失后，重试会发现带标签的 Workspace；结果仍不明确时，应检查 AIDAP 并配置匹配的 ID。不要通过删除状态强制再次创建。确定的 IAM/参数拒绝可修正后重试。不自动删除任何 Workspace。
+
+### 已有部署切换
+
+旧共享注册库 URL 仍配置时，自动模式默认拒绝创建。如果新建任务可以舍弃旧 MPA 的资源关系，在私有 YAML 中设置 `managed.postgres.legacy-urls: ignore`。即使 Studio 进程环境仍有 `SHARED_APIG_DATABASE_URL` 和 `DEPLOYMENT_DATABASE_ADMIN_URL`，该配置也不读取它们。新智能体从全新的管理与业务 Workspace 开始；旧智能体、数据库、Runtime 连接和记录都不修改或删除。不要用该设置以相同智能体 ID 继续未完成的旧创建任务。
+
+如果要保留并迁移旧资源关系，则保持默认的 `legacy-urls: reject` 并按以下步骤切换。已有部署不要直接删除旧 URL，否则会失去对已有资源关系的识别。
+
+1. 备份源注册库，并在整个切换期间停止**所有注册库写入方**，包括 Runtime 启动注册写入。
+2. 配置自动模式，显式指定当前业务 Workspace ID 及其实际 `business-workspace-name`，保持业务端点不变。要求 PostgreSQL_17。用 `OLD_SHARED_APIG_DATABASE_URL` 等私有环境变量提供旧注册库 URL。
+3. 执行 `veadk mpa init-admin-db --config mpa-create.config.yaml --source-url-env OLD_SHARED_APIG_DATABASE_URL`。它准备 Workspace/管理库，并按下文迁移规则原子复制注册记录，不搬迁业务库、不修改运行中 Runtime 的环境变量。
+4. 核对复制后的资源绑定。按现有安全部署流程协调运行中 Runtime 的 `SHARED_APIG_DATABASE_URL` 切至新管理库；切换完成后才移除 Studio/CLI 环境中的旧注册库 URL。保留旧业务凭据，或在删除废弃配置前显式核验接管后的连接。验证后才恢复写入；保留源备份以便回滚。
+
+仓库测试不执行线上迁移或云资源分配。限制和验证情况参见[自动 PG 设计](../../../../prd-spec/features/mpa-space-scoped-resources/2026-09-23-auto-pg-workspaces.zh.md)。
+
+
+## 手动 / 旧模式服务端配置
 
 1. 复制[示例 YAML](../../../../prd-spec/features/mpa-agent-oneclick-provision/mpa-create.config.example.yaml) 到私有的 `mpa-create.config.yaml`。填写后的配置不要进入 Git。
 2. 提供已有的 PostgreSQL 实例、共享注册数据库、数据库登录/属主角色、Runtime/worker IAM 角色、镜像和模型访问权限。部署管理员须有 `CREATEDB` 和指定业务库属主的权限。注册库须允许建表，并使用直连或会话级连接池；事务级连接池与 advisory lock 不兼容。
@@ -18,9 +53,56 @@ VeADK 可准备 MPA 前置资源并部署智能体，无需检出 `agentkit-mpa-
 
 ## 在 Studio 使用
 
-选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。具有智能体管理权限的管理员可填写稳定的智能体 ID 和描述，查看资源计划并提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
+选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。三步依次填写基础信息、已有 PostgreSQL 实例主机/端口，以及可选的 OpenViking 服务地址/资源 ID。生成的智能体 ID 为只读。PG 步骤提供[火山引擎 AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)入口；主机/端口必须与服务端配置的管理员连接一致。OpenViking 步骤提供[上下文管理控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default)入口；该页面地址不是要填写的服务地址。PG 凭据和 OpenViking API Key 仍由服务端配置。查看资源计划后在第三步提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
 
 最初的配置检查是本地校验，**不代表**真实权限或连通性已通过。提交后、创建资源前会检查云账号和数据库权限；后续各云步骤检查自身响应。关闭窗口可让创建继续，显式取消才停止编排。在同一浏览器会话重新打开可恢复进度。窗口支持键盘、多行中文输入、两种主题和窄窗口。
+
+## 手动配置两个 PostgreSQL Workspace
+
+先在 [AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)手动创建两个 Workspace：
+
+```text
+mpa_admin_workspace
+└── mpa_admin_db
+    ├── mpa_account_network
+    ├── mpa_account_apig
+    └── mpa_agent_deployment
+业务 Workspace（复用当前 Workspace）
+├── mpa_agent_<agent-A-hash>
+└── mpa_agent_<agent-B-hash>
+```
+
+手动模式请参考示例 YAML，并将 `managed.postgres.mode` 改为 `manual`。设置 `admin-workspace-name: mpa_admin_workspace`、真实的 `admin-workspace-id` 和 `business-workspace-id`，以及 `admin-database-url-env: MPA_ADMIN_DATABASE_ADMIN_URL`。两个 ID 和主机必须不同；管理连接必须使用 `mpa_admin_db`。请在控制台核实 ID 和端点归属：本地校验不会查询 AIDAP，也不能证明云资源归属。不配置 `managed.postgres` 则兼容旧行为。
+
+| 服务端环境变量 | 目标与用途 |
+| --- | --- |
+| `DEPLOYMENT_DATABASE_ADMIN_URL` | 业务 Workspace 的已有维护库，用于创建各智能体业务库。 |
+| `SHARED_APIG_DATABASE_URL` | 管理 Workspace 的 `mpa_admin_db`；注册库登录用户/owner，具备建表权限并使用会话池。 |
+| `MPA_ADMIN_DATABASE_ADMIN_URL` | 管理 Workspace 的已有维护库，例如 `aidb`；仅 `init-admin-db` 使用，需要 `CREATEDB` 和分配注册库 owner 的权限。 |
+
+平铺 `pg-host`、`pg-user`、`pg-password` 和模板/Runtime PG 配置继续指向**业务** Workspace。管理维护凭据不会注入 Runtime。现有 MPA 镜像仍接收 `SHARED_APIG_DATABASE_URL` 用于注册库启动；本次不重设计其权限，也不新增每智能体数据库用户。不会自动创建或删除 Workspace。普通创建要求管理库已存在，不会静默创建空库替代旧注册库。
+
+全新环境执行：
+
+```bash
+veadk mpa init-admin-db --config /secure/mpa-create.config.yaml
+```
+
+已有环境应**先复制原共享注册库，再切换**：
+
+1. 备份旧注册库。先用原配置完成或核对未完成的 Runtime 部署：复制会拒绝 `pending` 记录，因为其幂等请求哈希包含旧共享地址。停止 Studio 创建任务及所有可能写注册记录的 Runtime/渠道进程，直到完成端点切换。保留业务 PG 地址、库名、凭据和数据。
+2. 配置新的私有配置文件及上述环境变量。将旧共享连接放入 `OLD_SHARED_APIG_DATABASE_URL`。源凭据需要三张表的 SELECT 及 SHARE 表锁权限。不要把连接 URL 当作命令行参数传入。
+3. 执行：
+
+   ```bash
+   veadk mpa init-admin-db --config /secure/mpa-create.config.yaml --source-url-env OLD_SHARED_APIG_DATABASE_URL
+   ```
+
+4. 命令校验目标 owner 并拒绝无关 public 对象，仅复制三张表，保留完整 JSON 记录和身份。相同记录可重复执行；目标存在冲突或多余记录则整批复制事务回滚。不会写入源库。失败后目标数据库可能保留，解决原因后重试。锁/语句超时为 5/30 秒，整体上限为 120 秒。
+5. 核对返回的各表数量及资源身份。切换 Studio/CLI 共享连接，并显式发布已有 MPA Runtime 的新 `SHARED_APIG_DATABASE_URL`，再恢复写入。新建部署自动注入新地址；该命令不更新已有 Runtime。保持其业务 PG 配置不变，验证 Runtime、渠道和创建流程就绪。
+6. 保留源库用于恢复。新注册库尚无新写入时，可将**全部**使用方切回旧地址；产生新写入后必须先对账再回退，不可让使用方分别连接新旧注册库，也不要删除共享资源来重试。
+
+VPC/APIG 仍按账号和地域共享。部署 JSON 记录保存两个 Workspace ID；重试时绑定或已有业务端点改变，会在云资源写入前拒绝。业务库命名及 owner 校验保持不变。复制三张表不会迁移业务数据或更新 Runtime 镜像。
 
 ## CLI
 
@@ -120,3 +202,9 @@ sqlite3 -readonly .adk/mpa-creation.sqlite3 "SELECT task_id,datetime(created,'un
 ### 初始化元数据延迟
 
 对于已持久化创建 ID/令牌/哈希的托管 Worker，初始化期间缺失 ID/项目/归属标签时，最多观察四次不完整响应，依次等待 5、10、20 秒，处理 CreateTool 返回后元数据稍晚可见的情况。已有值明确冲突仍立即失败；Ready 后缺失字段及终态/未知状态不享受宽限。等待遵循原阶段期限和取消，不会创建另一个 Worker。安全诊断操作标明具体字段（`worker_id`、`worker_project`、`worker_managed_by`、`worker_agent_key`、`worker_agent_binding`、`worker_state`）；`metadata_pending` 表示正在等待，`metadata_missing` 表示有界检查未通过。实际字段值仍保持私有。
+
+托管部署接受带 `sslmode` 的 PostgreSQL 注册库 URL，并将该查询参数转换为 MPA Runtime 的 asyncpg 驱动使用的 `ssl`，保留原 TLS 模式。自动准备和手动配置的管理库均适用，无需重新构建镜像。已有未完成部署可以在保持资源身份不变的情况下恢复并应用此转换。
+
+## Studio A2A 发现默认配置
+
+Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=false`。使用兼容的 MPA 镜像时，Studio 的 Runtime-key `/list-apps` 探测收到 404，随后通过 A2A agent card 发现 `a2a-default`。`A2A_TIP_VERIFY_ENABLED=false` 保留现有外层网关 key-auth 集成，不绕过 REST JWT 鉴权。仍支持显式 `managed.runtime.env` 覆盖；引用 Runtime / 模板的环境保持不变。已有 Runtime 需要显式更新配置并发布；在 Studio 重新连接以刷新发现结果。本次默认值修改不需要重建前端。

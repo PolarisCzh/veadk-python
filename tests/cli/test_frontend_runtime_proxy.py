@@ -3739,6 +3739,7 @@ def test_runtime_proxy_uses_exact_list_item_when_role_get_runtime_is_hidden(
     assert len(list_requests) == 1
 
 
+@pytest.mark.parametrize("endpoint_prefix", ["", "/runtime/runtime-1"])
 @pytest.mark.parametrize("streaming", [False, True, "fallback"])
 @pytest.mark.parametrize(
     "mpa,info_app",
@@ -3750,8 +3751,11 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     streaming: bool | str,
     mpa: bool,
     info_app: str,
+    endpoint_prefix: str,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
+    endpoint = "https://runtime.example" + endpoint_prefix
+    rpc_url = (endpoint if mpa else "https://runtime.example") + "/a2a/jsonrpc"
     requests: list[dict[str, Any]] = []
     from veadk.cli.runtime_a2a_stream import A2AStreamDecoder
 
@@ -3801,7 +3805,7 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                 project_name="default",
                 network_configurations=[
                     SimpleNamespace(
-                        endpoint="https://runtime.example",
+                        endpoint=endpoint,
                         network_type="public",
                     )
                 ],
@@ -3863,12 +3867,12 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
         async def send(self, request: dict[str, Any], *, stream: bool):
             del stream
             url = request["url"]
-            if url == "https://runtime.example/list-apps":
+            if url == endpoint + "/list-apps":
                 return _FakeUpstreamResponse(
                     status_code=404,
                     body=b'{"detail":"Not Found"}',
                 )
-            if url == "https://runtime.example/.well-known/agent-card.json":
+            if url == endpoint + "/.well-known/agent-card.json":
                 return _FakeUpstreamResponse(
                     status_code=200,
                     body=json.dumps(
@@ -3936,7 +3940,7 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                         }
                     ).encode(),
                 )
-            if url == "https://runtime.example/a2a/jsonrpc":
+            if url == rpc_url:
                 payload = json.loads(request["content"])
                 if payload["method"] == "tasks/get":
                     return _FakeUpstreamResponse(
@@ -4156,13 +4160,13 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     assert [session["id"] for session in restored_sessions.json()] == ["sid"]
     assert '"adk_thought"' not in run_response.text
     assert any(
-        request["url"] == "https://runtime.example/.well-known/agent-card.json"
+        request["url"] == endpoint + "/.well-known/agent-card.json"
         for request in requests
     )
     runtime_requests = [
         request
         for request in requests
-        if request["url"] == "https://runtime.example/a2a/jsonrpc"
+        if request["url"] == rpc_url
         and json.loads(request["content"])["method"]
         in {
             "message/send",

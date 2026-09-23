@@ -32,6 +32,13 @@ def test_tasks_are_owner_scoped_and_duplicate_submission_reuses_identity(tmp_pat
                 config_path="x",
                 timeout=60,
             )
+        with pytest.raises(TaskError):
+            await service.start(
+                "owner",
+                {**payload, "pgHost": "different.example"},
+                config_path="x",
+                timeout=60,
+            )
         await service.cancel("owner", task["taskId"])
         await service.close()
         assert service.get("owner", task["taskId"])["state"] == "cancelled"
@@ -59,6 +66,49 @@ def test_raw_child_errors_never_reach_task_response(tmp_path):
         result = service.get("owner", task["taskId"])
         assert result["state"] == "failed"
         assert "secret-should-not-escape" not in str(result)
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_nonsecret_resource_choices_reach_child_and_retain_request_identity(tmp_path):
+    import json
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        received = tmp_path / "resources.json"
+        result = {
+            "runtime_id": "r-test",
+            "skill_space_id": "ss-test",
+            "gateway_id": "gw-test",
+            "agent_id": "mi-test",
+            "region": "cn-beijing",
+            "state": "ready",
+        }
+        code = (
+            "import json,sys,pathlib; "
+            "data=json.loads(sys.stdin.read()); "
+            f"pathlib.Path({str(received)!r}).write_text(json.dumps(data['resources'])); "
+            f"print('MPA_EVENT '+json.dumps({{'result': {result!r}}}))"
+        )
+        service.command = lambda: [sys.executable, "-c", code]
+        payload = {
+            "requestId": "77777777-7777-4777-8777-777777777777",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+            "pgHost": "db.example",
+            "pgPort": "5432",
+            "openvikingUrl": "https://api.example.test/openviking",
+            "openvikingResourceId": "ov-test",
+        }
+        task = await service.start("owner", payload, config_path="unused", timeout=60)
+        await asyncio.gather(*service.running.values())
+        assert service.get("owner", task["taskId"])["state"] == "succeeded"
+        assert json.loads(received.read_text()) == {
+            key: payload[key]
+            for key in ("pgHost", "pgPort", "openvikingUrl", "openvikingResourceId")
+        }
         await service.close()
 
     asyncio.run(run())

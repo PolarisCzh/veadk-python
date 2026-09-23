@@ -12,15 +12,23 @@ import {
   type MpaCreationInput,
   type MpaCreationTask,
   type MpaCreationConfig,
+  MpaCreationRequestError,
 } from "../../adk/mpaCreation";
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
 import { validCreationImage } from "../../adk/mpaCreationImages";
+import { validOpenViking, validPgTarget } from "../../adk/mpaCreationResources";
+
+const PG_CONSOLE_URL =
+  "https://console.volcengine.com/aidap/region:aidap+cn-beijing/";
+const OPENVIKING_CONSOLE_URL =
+  "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default";
 
 function initial(region: string): {
   input: MpaCreationInput;
   taskId?: string;
   submitted?: boolean;
+  step?: number;
 } {
   try {
     const saved = JSON.parse(
@@ -30,8 +38,21 @@ function initial(region: string): {
       saved?.input?.region === region &&
       typeof saved.input.requestId === "string" &&
       typeof saved.input.agentId === "string"
-    )
+    ) {
+      const suffix = saved.input.requestId.replace(/-/g, "");
+      if (
+        !saved.submitted &&
+        !saved.taskId &&
+        /^[0-9a-f]{32}$/.test(suffix) &&
+        saved.input.agentId === `mi-${suffix.slice(0, 12)}`
+      ) {
+        return {
+          ...saved,
+          input: { ...saved.input, agentId: `mi-${suffix.slice(0, 24)}` },
+        };
+      }
       return saved;
+    }
   } catch {
     /* A fresh form is safe when browser storage is unavailable. */
   }
@@ -59,6 +80,11 @@ export function MpaCreateDialog({
   const key = (name: string) => `myAgents.mpaCreate.${name}`;
   const [saved] = useState(() => initial(region));
   const [input, setInput] = useState(saved.input);
+  const [step, setStep] = useState(
+    saved.submitted || saved.taskId
+      ? 2
+      : Math.min(2, Math.max(0, saved.step ?? 0)),
+  );
   const [taskId, setTaskId] = useState(saved.taskId);
   const [submitted, setSubmitted] = useState(
     Boolean(saved.submitted || saved.taskId),
@@ -80,11 +106,30 @@ export function MpaCreateDialog({
   const imagesValid =
     validCreationImage(input.runtimeImage) &&
     validCreationImage(input.workerImage);
+  const autoPg = config?.postgresMode === "auto";
+  const pgValid = autoPg
+    ? !input.pgHost && !input.pgPort
+    : validPgTarget(input.pgHost, input.pgPort);
+  const openvikingValid = validOpenViking(
+    input.openvikingUrl,
+    input.openvikingResourceId,
+  );
+  useEffect(() => {
+    if (submitted || taskId) return;
+    try {
+      sessionStorage.setItem(
+        `mpa-create:${region}`,
+        JSON.stringify({ input, step }),
+      );
+    } catch {
+      /* Draft contains nonsecret settings only; storage is optional. */
+    }
+  }, [input, step, region, submitted, taskId]);
   function persist(id?: string) {
     try {
       sessionStorage.setItem(
         `mpa-create:${region}`,
-        JSON.stringify({ input, taskId: id, submitted: true }),
+        JSON.stringify({ input, taskId: id, submitted: true, step: 2 }),
       );
     } catch {
       /* Server identity still makes retries idempotent. */
@@ -114,6 +159,14 @@ export function MpaCreateDialog({
               ...previous,
               runtimeImage: previous.runtimeImage ?? value.runtimeImage ?? "",
               workerImage: previous.workerImage ?? value.workerImage ?? "",
+              pgHost:
+                value.postgresMode === "auto"
+                  ? ""
+                  : (previous.pgHost ?? value.pgHost ?? ""),
+              pgPort:
+                value.postgresMode === "auto"
+                  ? ""
+                  : (previous.pgPort ?? value.pgPort ?? ""),
             }));
           }
         }
@@ -163,6 +216,9 @@ export function MpaCreateDialog({
       lock.current ||
       !config?.configured ||
       !imagesValid ||
+      !pgValid ||
+      !openvikingValid ||
+      step !== 2 ||
       running ||
       task?.state === "succeeded"
     )
@@ -182,10 +238,17 @@ export function MpaCreateDialog({
       setTask(value);
       setRevision((v) => v + 1);
     } catch (reason) {
-      if (alive.current && !controller.signal.aborted)
+      if (alive.current && !controller.signal.aborted) {
+        if (
+          reason instanceof MpaCreationRequestError &&
+          (reason.status === 400 || reason.status === 422)
+        ) {
+          setSubmitted(false);
+        }
         setError(
           reason instanceof Error ? reason.message : t(key("creationFailed")),
         );
+      }
     } finally {
       lock.current = false;
       if (alive.current) setBusy(false);
@@ -237,86 +300,227 @@ export function MpaCreateDialog({
               closeLabel={t(key("close"))}
             >
               <div className="mpa-create-body">
-                <p>
-                  {t(key("region"))}：{region}
-                </p>
-                <label>
-                  {t(key("agentId"))}
-                  <input
-                    value={input.agentId}
-                    pattern="[a-z0-9][a-z0-9_-]{0,63}"
-                    maxLength={64}
-                    disabled={busy || submitted}
-                    onChange={(event) =>
-                      setInput({ ...input, agentId: event.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  {t(key("description"))}
-                  <Textarea
-                    className="mpa-create-description"
-                    value={input.description}
-                    maxLength={512}
-                    disabled={busy || submitted}
-                    onChange={(event) =>
-                      setInput({ ...input, description: event.target.value })
-                    }
-                  />
-                </label>
-                {(["runtimeImage", "workerImage"] as const).map((field) => (
-                  <label key={field}>
-                    {t(key(field))}
-                    <input
-                      name={field}
-                      value={
-                        submitted
-                          ? (task?.images?.[field] ?? input[field] ?? "")
-                          : (input[field] ?? "")
-                      }
-                      maxLength={1024}
-                      placeholder={t(key("imageDefault"))}
-                      disabled={
-                        loading || busy || submitted || !config?.configured
-                      }
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-invalid={!validCreationImage(input[field])}
-                      aria-describedby={`mpa-${field}-help`}
-                      onChange={(event) =>
-                        setInput((previous) => ({
-                          ...previous,
-                          [field]: event.target.value,
-                        }))
-                      }
-                    />
-                    <p
-                      id={`mpa-${field}-help`}
-                      role={
-                        !validCreationImage(input[field]) ? "alert" : undefined
-                      }
+                <ol
+                  className="mpa-create-steps"
+                  aria-label={t(key("stepsLabel"))}
+                >
+                  {(["basics", "postgres", "openviking"] as const).map(
+                    (name, index) => (
+                      <li
+                        key={name}
+                        aria-current={step === index ? "step" : undefined}
+                      >
+                        <span>{index + 1}</span>
+                        {t(
+                          key(
+                            `steps.${name === "postgres" && autoPg ? "autoPostgres" : name}`,
+                          ),
+                        )}
+                      </li>
+                    ),
+                  )}
+                </ol>
+                {step === 0 && (
+                  <>
+                    <p>
+                      {t(key("region"))}：{region}
+                    </p>
+                    <label>
+                      {t(key("agentId"))}
+                      <input
+                        name="agentId"
+                        value={input.agentId}
+                        pattern="[a-z0-9][a-z0-9_-]{0,63}"
+                        maxLength={64}
+                        readOnly
+                        aria-readonly="true"
+                      />
+                    </label>
+                    <label>
+                      {t(key("description"))}
+                      <Textarea
+                        className="mpa-create-description"
+                        value={input.description}
+                        maxLength={512}
+                        disabled={busy || submitted}
+                        onChange={(event) =>
+                          setInput({
+                            ...input,
+                            description: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                    {(["runtimeImage", "workerImage"] as const).map((field) => (
+                      <label key={field}>
+                        {t(key(field))}
+                        <input
+                          name={field}
+                          value={
+                            submitted
+                              ? (task?.images?.[field] ?? input[field] ?? "")
+                              : (input[field] ?? "")
+                          }
+                          maxLength={1024}
+                          placeholder={t(key("imageDefault"))}
+                          disabled={
+                            loading || busy || submitted || !config?.configured
+                          }
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={!validCreationImage(input[field])}
+                          aria-describedby={`mpa-${field}-help`}
+                          onChange={(event) =>
+                            setInput((previous) => ({
+                              ...previous,
+                              [field]: event.target.value,
+                            }))
+                          }
+                        />
+                        <p
+                          id={`mpa-${field}-help`}
+                          role={
+                            !validCreationImage(input[field])
+                              ? "alert"
+                              : undefined
+                          }
+                        >
+                          {t(
+                            key(
+                              validCreationImage(input[field])
+                                ? "imageDefault"
+                                : "imageInvalid",
+                            ),
+                          )}
+                        </p>
+                      </label>
+                    ))}
+                    <section
+                      className="mpa-create-plan"
+                      aria-label={t(key("plan"))}
                     >
+                      <strong>{t(key("plan"))}</strong>
+                      <ul>
+                        <li>{t(key("sharedResources"))}</li>
+                        <li>{t(key("agentResources"))}</li>
+                        <li>{t(key("readiness"))}</li>
+                      </ul>
+                    </section>
+                  </>
+                )}
+                {step === 1 && (
+                  <>
+                    <p>
                       {t(
                         key(
-                          validCreationImage(input[field])
-                            ? "imageDefault"
-                            : "imageInvalid",
+                          autoPg
+                            ? "pgAutoDescription"
+                            : config?.postgresLayout === "split-workspaces"
+                              ? "pgSplitDescription"
+                              : "pgDescription",
                         ),
                       )}
                     </p>
-                  </label>
-                ))}
-                <section
-                  className="mpa-create-plan"
-                  aria-label={t(key("plan"))}
-                >
-                  <strong>{t(key("plan"))}</strong>
-                  <ul>
-                    <li>{t(key("sharedResources"))}</li>
-                    <li>{t(key("agentResources"))}</li>
-                    <li>{t(key("readiness"))}</li>
-                  </ul>
-                </section>
+                    <a
+                      href={PG_CONSOLE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {t(key("pgConsole"))}
+                    </a>
+                    {!autoPg && (
+                      <>
+                        <label>
+                          {t(key("pgHost"))}
+                          <input
+                            name="pgHost"
+                            value={input.pgHost ?? ""}
+                            maxLength={255}
+                            disabled={busy || submitted}
+                            aria-invalid={!pgValid}
+                            onChange={(event) =>
+                              setInput((previous) => ({
+                                ...previous,
+                                pgHost: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          {t(key("pgPort"))}
+                          <input
+                            name="pgPort"
+                            value={input.pgPort ?? ""}
+                            inputMode="numeric"
+                            maxLength={5}
+                            disabled={busy || submitted}
+                            aria-invalid={!pgValid}
+                            onChange={(event) =>
+                              setInput((previous) => ({
+                                ...previous,
+                                pgPort: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        {!pgValid && <p role="alert">{t(key("pgInvalid"))}</p>}
+                        <p>{t(key("pgCredentials"))}</p>
+                      </>
+                    )}
+                  </>
+                )}
+                {step === 2 && (
+                  <>
+                    <p>{t(key("openvikingDescription"))}</p>
+                    <a
+                      href={OPENVIKING_CONSOLE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {t(key("openvikingConsole"))}
+                    </a>
+                    <label>
+                      {t(key("openvikingUrl"))}
+                      <input
+                        name="openvikingUrl"
+                        value={input.openvikingUrl ?? ""}
+                        maxLength={1024}
+                        disabled={busy || submitted}
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-invalid={!openvikingValid}
+                        onChange={(event) =>
+                          setInput((previous) => ({
+                            ...previous,
+                            openvikingUrl: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      {t(key("openvikingResourceId"))}
+                      <input
+                        name="openvikingResourceId"
+                        value={input.openvikingResourceId ?? ""}
+                        maxLength={128}
+                        disabled={busy || submitted}
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-invalid={!openvikingValid}
+                        onChange={(event) =>
+                          setInput((previous) => ({
+                            ...previous,
+                            openvikingResourceId: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    {!openvikingValid && (
+                      <p role="alert">{t(key("openvikingInvalid"))}</p>
+                    )}
+                    <p>{t(key("openvikingCredentials"))}</p>
+                  </>
+                )}
                 {loading ? (
                   <p role="status">{t(key("checking"))}</p>
                 ) : config?.configured ? (
@@ -324,7 +528,11 @@ export function MpaCreateDialog({
                 ) : (
                   <div role="alert">
                     <p>{t(key("notConfigured"))}</p>
-                    <p>{config?.error}</p>
+                    <p>
+                      {config?.postgresMigrationRequired
+                        ? t(key("pgMigrationRequired"))
+                        : config?.error}
+                    </p>
                     <Button
                       variant="outline"
                       onClick={() => setRevision((v) => v + 1)}
@@ -356,6 +564,9 @@ export function MpaCreateDialog({
                     )}
                   </section>
                 )}
+                {autoPg && !pgValid && (
+                  <p role="alert">{t(key("pgModeChanged"))}</p>
+                )}
                 {error && <p role="alert">{error}</p>}
                 {running && <p>{t(key("background"))}</p>}
                 {confirmCancel ? (
@@ -383,6 +594,15 @@ export function MpaCreateDialog({
                     <Button variant="outline" disabled={busy} onClick={onClose}>
                       {t(key("close"))}
                     </Button>
+                    {!submitted && step > 0 && (
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => setStep((previous) => previous - 1)}
+                      >
+                        {t(key("previousStep"))}
+                      </Button>
+                    )}
                     {running ? (
                       <Button
                         variant="outline"
@@ -391,6 +611,17 @@ export function MpaCreateDialog({
                       >
                         {t(key("cancel"))}
                       </Button>
+                    ) : task?.state !== "succeeded" && step < 2 ? (
+                      <Button
+                        disabled={
+                          busy ||
+                          (step === 0 && !imagesValid) ||
+                          (step === 1 && !pgValid)
+                        }
+                        onClick={() => setStep((previous) => previous + 1)}
+                      >
+                        {t(key("next"))}
+                      </Button>
                     ) : task?.state !== "succeeded" ? (
                       <Button
                         loading={busy}
@@ -398,6 +629,8 @@ export function MpaCreateDialog({
                           loading ||
                           !config?.configured ||
                           !imagesValid ||
+                          !pgValid ||
+                          !openvikingValid ||
                           !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agentId)
                         }
                         onClick={() => void submit()}

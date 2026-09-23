@@ -9,6 +9,7 @@ import json
 import time
 
 import httpx
+from sqlalchemy.engine import make_url
 
 from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
 from veadk.integrations.mpa.managed.network import (
@@ -16,6 +17,19 @@ from veadk.integrations.mpa.managed.network import (
     NetworkOptions,
 )
 from veadk.integrations.mpa.managed.network_cloud import NetworkCloud
+
+
+def asyncpg_registry_url(url: str) -> str:
+    """Preserve the requested TLS mode in the Runtime's asyncpg URL dialect."""
+    parsed = make_url(url)
+    query = dict(parsed.query)
+    modes = [query[key] for key in ("sslmode", "ssl") if key in query]
+    if any(not isinstance(mode, str) for mode in modes) or len(set(modes)) > 1:
+        raise DeploymentError("Registry URL has conflicting or repeated TLS parameters")
+    if "sslmode" not in query:
+        return url
+    query["ssl"] = query.pop("sslmode")
+    return parsed.set(query=query).render_as_string(hide_password=False)
 
 
 class RuntimeCloud:
@@ -411,7 +425,7 @@ class AgentRuntimeDeployer:
             env.update(
                 PGDATABASE=name,
                 MPA_AGENT_ID=agent_id,
-                SHARED_APIG_DATABASE_URL=self.shared_url,
+                SHARED_APIG_DATABASE_URL=asyncpg_registry_url(self.shared_url),
                 REGION=self.region,
                 SKILL_SPACE_ID=skill_space_id,
             )
@@ -440,14 +454,36 @@ class AgentRuntimeDeployer:
                 json.dumps(desired, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             if record.get("pending") and record.get("request_hash") != digest:
-                # A legacy CreateRuntime may have succeeded without returning
-                # its ID. Retry its exact payload with the recorded ClientToken.
-                legacy = {**desired, "Name": "mpa-agent-" + suffix}
-                legacy_digest = hashlib.sha256(
-                    json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest()
-                if not runtime_id and record.get("request_hash") == legacy_digest:
-                    desired, digest = legacy, legacy_digest
+                candidates = [desired]
+                if env["SHARED_APIG_DATABASE_URL"] != self.shared_url:
+                    legacy_env = {**env, "SHARED_APIG_DATABASE_URL": self.shared_url}
+                    candidates.append(
+                        {
+                            **desired,
+                            "Envs": [
+                                {"Key": k, "Value": v}
+                                for k, v in sorted(legacy_env.items())
+                            ],
+                        }
+                    )
+                if not runtime_id:
+                    candidates += [
+                        {**candidate, "Name": "mpa-agent-" + suffix}
+                        for candidate in candidates
+                    ]
+                for candidate in candidates:
+                    legacy_digest = hashlib.sha256(
+                        json.dumps(
+                            candidate, sort_keys=True, separators=(",", ":")
+                        ).encode()
+                    ).hexdigest()
+                    if record.get("request_hash") == legacy_digest:
+                        digest = legacy_digest
+                        # A lost create response requires the original payload
+                        # and token. Finalization below uses the normalized env.
+                        if not runtime_id:
+                            desired = candidate
+                        break
             if record.get("pending") and record.get("request_hash") != digest:
                 raise DeploymentError(
                     "An unfinished deployment has different inputs; resume its original configuration first"

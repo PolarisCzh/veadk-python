@@ -14,6 +14,8 @@
 
 """Tests for mpa-agent runtime env assembly (FR-5/FR-10/FR-11, VC-10)."""
 
+from dataclasses import replace
+
 import pytest
 
 from veadk.integrations.mpa.mpa_provision import (
@@ -30,7 +32,7 @@ from veadk.integrations.mpa.mpa_provision import (
 
 
 def _params(**overrides) -> MpaProvisionParams:
-    base = dict(
+    base = MpaProvisionParams(
         image="registry.example.com/mpa:latest",
         registry_name="registry",
         mpa_agent_id="mi-abc123def456",
@@ -47,8 +49,7 @@ def _params(**overrides) -> MpaProvisionParams:
         model_name="doubao-seed",
         agentkit_tool_id="tool-1",
     )
-    base.update(overrides)
-    return MpaProvisionParams(**base)
+    return replace(base, **overrides)
 
 
 def test_derive_claw_space_id_from_account() -> None:
@@ -72,13 +73,32 @@ def test_generate_mpa_agent_id_is_valid_and_unique() -> None:
 
 def test_validate_mpa_agent_id_requires_canonical_shape() -> None:
     assert validate_mpa_agent_id(" mi-abc123def456 ") == "mi-abc123def456"
-    for value in ("mi-short", "mi-ABC123DEF456", "agent-abc123def456", ""):
+    assert validate_mpa_agent_id("mi-0123456789abcdef01234567") == (
+        "mi-0123456789abcdef01234567"
+    )
+    for value in (
+        "mi-short",
+        "mi-0123456789abcdef01",
+        "mi-ABC123DEF456",
+        "agent-abc123def456",
+        "",
+    ):
         with pytest.raises(ValueError, match="mi-"):
             validate_mpa_agent_id(value)
 
 
 def test_workload_identity_name_keeps_base_agent_id() -> None:
     assert workload_identity_name("mi-abc123def456") == "mi-abc123def456-studio"
+    assert workload_identity_name("mi-0123456789abcdef01234567") == (
+        "mi-0123456789abcdef01234567-studio"
+    )
+
+
+def test_flat_runtime_env_accepts_existing_studio_id_length() -> None:
+    agent_id = "mi-0123456789abcdef01234567"
+    env = build_runtime_env(_params(mpa_agent_id=agent_id), public_endpoint="")
+    assert env["MPA_AGENT_ID"] == agent_id
+    assert env["MPA_WORKLOAD_IDENTITY_NAME"] == f"{agent_id}-studio"
 
 
 def test_tool_name_is_derived_from_agent_id() -> None:
@@ -185,15 +205,19 @@ def test_mask_secret_hides_middle() -> None:
     assert "CODEX_MCP_RUNTIME_API_KEY" in SECRET_ENV_KEYS
 
 
-def test_runtime_jwt_default_and_explicit_override() -> None:
+def test_runtime_a2a_default_and_explicit_override() -> None:
     env = build_runtime_env(_params(), public_endpoint="https://runtime.example.com")
-    assert env["DISABLE_JWT_AUTH"] == "true"
-    overrides = {"DISABLE_JWT_AUTH": "false"}
+    assert env["DISABLE_JWT_AUTH"] == "false"
+    assert env["ENABLE_A2A"] == "true"
+    assert env["A2A_TIP_VERIFY_ENABLED"] == "false"
+    assert "MPA_AGENTKIT_MODE" not in env
+    overrides = {"DISABLE_JWT_AUTH": "true", "ENABLE_A2A": "false"}
     env = build_runtime_env(
         _params(extra_env=overrides), public_endpoint="https://runtime.example.com"
     )
-    assert env["DISABLE_JWT_AUTH"] == "false"
-    assert overrides == {"DISABLE_JWT_AUTH": "false"}
+    assert env["DISABLE_JWT_AUTH"] == "true"
+    assert env["ENABLE_A2A"] == "false"
+    assert overrides == {"DISABLE_JWT_AUTH": "true", "ENABLE_A2A": "false"}
 
 
 def test_database_instrumentation_default_and_explicit_override() -> None:

@@ -160,6 +160,33 @@ def test_definitive_permission_error_can_retry_after_permissions_fixed():
     asyncio.run(scenario())
 
 
+def test_explicit_adoption_recovers_unknown_create_without_second_gateway():
+    async def scenario():
+        registry, cloud = Registry(), Cloud()
+        registry.rows[(cloud.account, cloud.region)] = {
+            "vpc_id": "vpc-1",
+            "create_requested": True,
+        }
+        cloud.gateways["existing"] = {
+            "Id": "existing",
+            "Name": "previous-shared-gateway",
+            "Type": "standard",
+            "Region": cloud.region,
+            "Status": "Running",
+            "NetworkSpec": {"VpcId": "vpc-1"},
+        }
+        cloud.im = True
+
+        result = await service(registry, cloud).ensure(
+            vpc_id="vpc-1", subnet_ids=["subnet-1"], adopt_id="existing"
+        )
+        assert result["gateway_id"] == "existing"
+        assert result["state"] == "ready"
+        assert cloud.created == cloud.im_created == 0
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("code", ["AccessDenied", "Throttling", "InternalError"])
 def test_im_status_errors_do_not_trigger_create(code):
     async def scenario():

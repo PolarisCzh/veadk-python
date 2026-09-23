@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 STAGES = {
     "queued",
     "checking",
+    "admin_workspace",
+    "business_workspace",
+    "admin_database",
     "network",
     "gateway",
     "database",
@@ -226,6 +229,16 @@ class CreationTasks:
                 "owner": owner,
                 "region": payload["region"],
                 "images": self.get(owner, task_id)["images"],
+                "resources": {
+                    key: payload[key]
+                    for key in (
+                        "pgHost",
+                        "pgPort",
+                        "openvikingUrl",
+                        "openvikingResourceId",
+                    )
+                    if key in payload
+                },
             }
             assert process.stdin is not None and process.stdout is not None
             process.stdin.write(json.dumps(data).encode())

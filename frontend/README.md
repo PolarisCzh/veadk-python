@@ -1471,10 +1471,22 @@ The production entry loads both component token stylesheets before rendering. Wh
 
 ### MPA creation image inputs / MPA 创建镜像输入
 
+With `managed.postgres` configured, the PG step uses a shared business Workspace with a separate database per MPA. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
+
+配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
 The MPA creation dialog pre-fills MPA and Worker image inputs from the server profile. Users with agent-management permission can edit either reference or leave it blank to use the configured default. Inputs lock on submission; retry and browser-session recovery preserve the original request and effective-image snapshot. URLs and credentials are rejected. These values affect only the requested creation, not the server YAML or existing agents. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+
+The dialog now uses three steps: basics (generated read-only ID, description and images), PostgreSQL preparation (automatic explanation or manual host/port), and optional OpenViking HTTPS URL/resource ID. It links to the relevant Volcengine console pages. The server owns PG credentials and OpenViking API key; PostgreSQL host/port must match its administrator connection. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+
+创建弹窗现分为基础信息（生成的只读 ID、描述和镜像）、PostgreSQL 准备（自动说明或手动主机/端口）、可选 OpenViking HTTPS 地址/资源 ID 三步，并提供对应的火山引擎控制台入口。PG 凭据和 OpenViking API Key 由服务端管理；PG 主机/端口必须与管理员连接一致。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
 
 MPA 创建弹窗默认填入服务端配置中的 MPA 和 Worker 镜像。有智能体管理权限的用户可以修改或留空使用默认值。提交后锁定输入，重试和浏览器会话恢复保留原请求及实际镜像快照。不接受网址或凭据。这些输入只影响本次创建，不修改服务端 YAML 或已有智能体。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
 MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
 
 MPA grouped replies hide exact answer mirrors only in their derived view: an extended fragment reappears intact, including its original prefix. General Codex tool activity preserves commentary and subsequent model text under its original behavior.
+
+### MPA A2A shared gateway compatibility
+
+MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.

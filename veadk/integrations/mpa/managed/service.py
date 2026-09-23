@@ -5,13 +5,40 @@ from __future__ import annotations
 import copy
 import re
 
-from .config import ConfigurationError, Profile, Runtime
+from sqlalchemy.engine import make_url
+
+from .config import ConfigurationError, Profile, Runtime, validate_postgres_layout
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
 from .gateway import SharedAPIGService
 from .gateway_cloud import GatewayCloud
 from .network import AccountNetworkProvisioner, NetworkOptions
 from .runtime import AgentRuntimeDeployer, RuntimeCloud, env_map, template_from_runtime
 from .worker import WorkerCloud, ensure_worker
+
+
+def bind_postgres_workspaces(profile: Profile, record: dict):
+    settings = profile.managed.postgres
+    if settings is None:
+        if record.get("admin_workspace_id") or record.get("business_workspace_id"):
+            raise DeploymentError("Registered Workspace configuration must be retained")
+        return
+    binding = {
+        "admin_workspace_id": settings.admin_workspace_id,
+        "business_workspace_id": settings.business_workspace_id,
+    }
+    if any(key in record and record[key] != value for key, value in binding.items()):
+        raise DeploymentError("Registered Workspace binding differs from configuration")
+    business = make_url(profile.admin_url)
+    if (
+        "database_host" in record
+        and str(record["database_host"]).lower() != (business.host or "").lower()
+    ) or (
+        "database_port" in record and record["database_port"] != (business.port or 5432)
+    ):
+        raise DeploymentError(
+            "Registered business database endpoint differs from configuration"
+        )
+    record.update(binding)
 
 
 def fresh_template(profile, agent_id, account):
@@ -89,6 +116,7 @@ async def provision(
 ):
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) or not owner:
         raise DeploymentError("Invalid agent identity or owner")
+    validate_postgres_layout(profile)
     cloud = RuntimeCloud(
         region=profile.region, credential_file=profile.managed.credential_file
     )
@@ -97,6 +125,16 @@ async def provision(
     expected = str(profile.values.get("account_id", ""))
     if expected and account != expected:
         raise DeploymentError("Deployment credentials differ from the expected account")
+    if profile.managed.postgres and profile.managed.postgres.mode == "auto":
+        from .pg_bootstrap import prepare_postgres
+        from .pg_cloud import PGCloud
+
+        profile = await prepare_postgres(
+            profile,
+            PGCloud(region=profile.region, credentials=cloud._credentials),
+            account,
+            progress=progress,
+        )
     if profile.managed.from_runtime:
         template = template_from_runtime(
             await cloud.get(profile.managed.from_runtime), agent_id
@@ -112,8 +150,12 @@ async def provision(
         "A2A_PUBLIC_URL",
         "CODEX_MCP_RUNTIME_API_KEY",
         "DEPLOYMENT_DATABASE_ADMIN_URL",
+        "MPA_ADMIN_DATABASE_ADMIN_URL",
+        profile.managed.database_admin_url_env,
     ):
         env.pop(key, None)
+    if profile.managed.postgres:
+        env.pop(profile.managed.postgres.admin_database_url_env, None)
     env["MPA_AGENT_ID"] = agent_id
     template["Envs"] = [{"Key": k, "Value": v} for k, v in env.items()]
     template["Description"] = description[:512]
@@ -147,6 +189,7 @@ async def provision(
                 raise DeploymentError(
                     "Agent belongs to another owner; use a new agent ID"
                 )
+            bind_postgres_workspaces(profile, record)
             record["studio_owner"] = owner
             await entry.save(record)
             current = (

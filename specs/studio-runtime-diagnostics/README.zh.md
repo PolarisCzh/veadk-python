@@ -54,3 +54,5 @@
 CON-8/CON-11 修正（已实现）：保留 sandbox 完成后的不同外层文本与推理。桥接只去重完全相同的完整答案 part；MPA 合并视图可以隐藏完全相同的答案副本，但不改变原 turn，片段扩展后完整恢复。通用 Codex 工具行为恢复。参见[保留补充内容](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-preserve-followup-content.zh.md)。
 
 - [MPA 推理快照归一化](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-reasoning-snapshots.zh.md).
+
+- `CON-12`：仅 MPA A2A 对同源默认 `/a2a/jsonrpc` 卡片地址补齐可信控制面 endpoint 的 `/runtime/[a-z0-9-]+` 前缀。已经有前缀、其他路径、跨源、查询/片段/用户信息不改写。发送和历史恢复一致使用该地址；通用智能体保持不变。参见 [A2A 发现修复](../../prd-spec/bugfixes/2026-09-23-mpa-a2a-discovery-default.zh.md)。

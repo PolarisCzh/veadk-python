@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import (
@@ -22,9 +23,65 @@ from sqlalchemy.engine import make_url
 
 from .network import NetworkOptions
 
+ADMIN_DATABASE_NAME = "mpa_admin_db"
+ADMIN_WORKSPACE_NAME = "mpa_admin_workspace"
+
 
 class ConfigurationError(ValueError):
     """A safe configuration error without user input or secret values."""
+
+
+def validate_creation_resources(values: dict[str, str]) -> dict[str, str]:
+    """Validate nonsecret, per-creation resource choices."""
+    selected = {
+        key: str(values.get(key, "")).strip()
+        for key in ("pgHost", "pgPort", "openvikingUrl", "openvikingResourceId")
+    }
+    host, port = selected["pgHost"], selected["pgPort"]
+    if (
+        bool(host) != bool(port)
+        or host
+        and (
+            len(host) > 255
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", host)
+            or ".." in host
+        )
+    ):
+        raise ConfigurationError("Enter a valid PostgreSQL host and port")
+    if port and (
+        not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535
+    ):
+        raise ConfigurationError("Enter a valid PostgreSQL port")
+    url, resource_id = selected["openvikingUrl"], selected["openvikingResourceId"]
+    if url:
+        try:
+            parsed = urlsplit(url)
+            hostname = parsed.hostname
+            port_number = parsed.port
+        except ValueError:
+            raise ConfigurationError(
+                "Enter a valid HTTPS OpenViking service URL"
+            ) from None
+        if (
+            len(url) > 1024
+            or any(c.isspace() for c in url)
+            or parsed.scheme != "https"
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or ":" in parsed.netloc
+            or port_number is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ConfigurationError("Enter a valid HTTPS OpenViking service URL")
+    if resource_id and (
+        not url
+        or len(resource_id) > 128
+        or not re.fullmatch(r"ov-[a-zA-Z0-9_-]+", resource_id)
+    ):
+        raise ConfigurationError("Enter a valid OpenViking URL and resource ID")
+    return selected
 
 
 def validate_image_reference(value: str) -> str:
@@ -122,10 +179,52 @@ class Runtime(Options):
         return self
 
 
+class PostgresWorkspaces(Options):
+    mode: Literal["manual", "auto"] = "manual"
+    legacy_urls: Literal["reject", "ignore"] = "reject"
+    admin_workspace_id: str = Field(
+        default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$"
+    )
+    business_workspace_id: str = Field(
+        default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$"
+    )
+    admin_workspace_name: Literal["mpa_admin_workspace"] = ADMIN_WORKSPACE_NAME
+    business_workspace_name: str = Field(
+        default="mpa_business_workspace",
+        min_length=1,
+        max_length=63,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    project_name: str = Field(default="default", min_length=1, max_length=128)
+    bootstrap_path: str = Field(default=".adk/mpa-pg-bootstrap.sqlite3", min_length=1)
+    timeout_seconds: int = Field(default=600, ge=30, le=1800)
+    admin_database_url_env: str = Field(
+        default="MPA_ADMIN_DATABASE_ADMIN_URL", pattern=r"^[A-Z][A-Z0-9_]{0,127}$"
+    )
+
+    @model_validator(mode="after")
+    def distinct_workspaces(self):
+        if self.mode != "auto" and self.legacy_urls != "reject":
+            raise ValueError("Ignoring legacy URLs requires automatic PostgreSQL mode")
+        if self.mode == "manual" and not (
+            self.admin_workspace_id and self.business_workspace_id
+        ):
+            raise ValueError("Manual configuration requires both Workspace IDs")
+        if (
+            self.admin_workspace_id
+            and self.admin_workspace_id == self.business_workspace_id
+        ):
+            raise ValueError("Management and business Workspaces must differ")
+        if self.business_workspace_name == self.admin_workspace_name:
+            raise ValueError("Management and business Workspace names must differ")
+        return self
+
+
 class Managed(Options):
     version: Literal[1]
     database_admin_url_env: str = "DEPLOYMENT_DATABASE_ADMIN_URL"
     shared_database_url_env: str = "SHARED_APIG_DATABASE_URL"
+    postgres: PostgresWorkspaces | None = None
     credential_file: str = ""
     from_runtime: str = ""
     template_file: str = ""
@@ -168,10 +267,28 @@ class Profile:
             ) from None
 
     def summary(self):
+        auto = (
+            self.managed.postgres is not None and self.managed.postgres.mode == "auto"
+        )
+        admin = make_url(self.admin_url) if self.admin_url and not auto else None
+        migration_required = auto and bool(self.shared_url)
         return {
             **self.image_defaults(),
+            "pgHost": (admin.host or "") if admin else "",
+            "pgPort": str(admin.port or 5432) if admin else "",
+            **({"postgresMode": "auto"} if auto else {}),
+            **({"postgresMigrationRequired": True} if migration_required else {}),
+            **(
+                {
+                    "postgresLayout": "split-workspaces",
+                    "adminWorkspaceName": ADMIN_WORKSPACE_NAME,
+                    "adminDatabaseName": ADMIN_DATABASE_NAME,
+                }
+                if self.managed.postgres
+                else {}
+            ),
             "region": self.region,
-            "configured": True,
+            "configured": not migration_required,
             "source": "reference" if self.managed.from_runtime else "template",
             "resources": [
                 "network",
@@ -198,12 +315,94 @@ def with_creation_images(profile: Profile, images: dict[str, str]) -> Profile:
     return replace(profile, managed=managed)
 
 
+def with_creation_resources(profile: Profile, resources: dict[str, str]) -> Profile:
+    selected = validate_creation_resources(resources)
+    managed = profile.managed.model_copy(deep=True)
+    host, port = selected["pgHost"], selected["pgPort"]
+    if (
+        profile.managed.postgres
+        and profile.managed.postgres.mode == "auto"
+        and profile.shared_url
+    ):
+        raise ConfigurationError(
+            "Migrate the existing shared registry before automatic PG provisioning"
+        )
+    if (
+        profile.managed.postgres
+        and profile.managed.postgres.mode == "auto"
+        and (host or port)
+    ):
+        raise ConfigurationError(
+            "Automatic PG provisioning does not accept PostgreSQL host or port inputs"
+        )
+    if host:
+        admin = make_url(profile.admin_url)
+        if (host.lower(), int(port)) != (
+            (admin.host or "").lower(),
+            admin.port or 5432,
+        ):
+            raise ConfigurationError(
+                "PostgreSQL host and port must match the configured administrator connection"
+            )
+        managed.runtime.env.update(
+            PGHOST=admin.host or host, PGPORT=str(admin.port or 5432)
+        )
+    if selected["openvikingUrl"]:
+        managed.runtime.env["OPENVIKING_URL"] = selected["openvikingUrl"]
+        managed.runtime.env["OPENVIKING_RESOURCE_ID"] = selected["openvikingResourceId"]
+    return replace(profile, managed=managed)
+
+
 def _secret(name: str) -> str:
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", name):
         raise ConfigurationError("Invalid secret environment variable name")
     value = os.getenv(name, "")
     if not value or value.startswith("<"):
         raise ConfigurationError(f"Missing server environment variable: {name}")
+    return value
+
+
+def validate_postgres_layout(profile: Profile) -> None:
+    """Check configured boundaries; cloud Workspace ownership is operator-verified."""
+    if not profile.managed.postgres:
+        return
+    if profile.managed.postgres.mode == "auto":
+        return
+    business, shared = make_url(profile.admin_url), make_url(profile.shared_url)
+    if shared.database != ADMIN_DATABASE_NAME:
+        raise ConfigurationError("The management connection must use mpa_admin_db")
+    if (business.host or "").lower() == (shared.host or "").lower():
+        raise ConfigurationError(
+            "Management and business Workspaces require distinct PostgreSQL hosts"
+        )
+    if not shared.username:
+        raise ConfigurationError("The management connection requires a database owner")
+
+
+def management_admin_url(profile: Profile, value: str = "") -> str:
+    """Resolve the maintenance credential only for explicit registry initialization."""
+    settings = profile.managed.postgres
+    if settings is None:
+        raise ConfigurationError(
+            "Configure managed.postgres before preparing mpa_admin_db"
+        )
+    validate_postgres_layout(profile)
+    value = value or _secret(settings.admin_database_url_env)
+    try:
+        admin, shared = make_url(value), make_url(profile.shared_url)
+        if (
+            admin.get_backend_name() != "postgresql"
+            or not admin.database
+            or not admin.username
+            or (admin.host or "").lower() != (shared.host or "").lower()
+            or (admin.port or 5432) != (shared.port or 5432)
+            or admin.database == ADMIN_DATABASE_NAME
+        ):
+            raise ValueError()
+    except Exception:
+        raise ConfigurationError(
+            "Management maintenance connection must use another database on the management host/port"
+        ) from None
     return value
 
 
@@ -258,13 +457,26 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
                 "Configure the managed section in VEADK_MPA_CREATE_CONFIG"
             )
         managed_values = dict(values["managed"])
+        auto = (
+            isinstance(managed_values.get("postgres"), dict)
+            and managed_values["postgres"].get("mode") == "auto"
+        )
         if isinstance(managed_values.get("runtime"), dict):
             managed_values["runtime"] = dict(managed_values["runtime"])
             if "env" in managed_values["runtime"]:
                 managed_values["runtime"]["env"] = _resolve(
-                    managed_values["runtime"]["env"]
+                    {
+                        k: v
+                        for k, v in managed_values["runtime"]["env"].items()
+                        if not (auto and k.startswith("PG"))
+                    }
                 )
         managed = Managed.model_validate(managed_values)
+        ignore_legacy_urls = (
+            auto
+            and managed.postgres is not None
+            and managed.postgres.legacy_urls == "ignore"
+        )
         selected = str(values.get("region", "cn-beijing"))
         if not re.fullmatch(r"cn-[a-z]+", selected) or region and selected != region:
             raise ConfigurationError("No managed configuration for the selected region")
@@ -279,9 +491,23 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
             raise ConfigurationError(
                 "Explicit APIG adoption requires its existing VPC ID"
             )
-        admin = _secret(managed.database_admin_url_env)
-        shared = _secret(managed.shared_database_url_env)
+        if auto:
+            admin = (
+                ""
+                if ignore_legacy_urls
+                else os.getenv(managed.database_admin_url_env, "")
+            )
+            shared = (
+                ""
+                if ignore_legacy_urls
+                else os.getenv(managed.shared_database_url_env, "")
+            )
+        else:
+            admin = _secret(managed.database_admin_url_env)
+            shared = _secret(managed.shared_database_url_env)
         for value in (admin, shared):
+            if auto and not value:
+                continue
             url = make_url(value)
             if (
                 url.get_backend_name() != "postgresql"
@@ -295,9 +521,16 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
         if managed.template_file:
             template_path = file.parent / managed.template_file
             try:
-                template = _resolve(
-                    json.loads(_read_configuration_file(template_path, template=True))
+                template = json.loads(
+                    _read_configuration_file(template_path, template=True)
                 )
+                if auto and isinstance(template, dict):
+                    template["Envs"] = [
+                        item
+                        for item in template.get("Envs", [])
+                        if not str(item.get("Key", "")).startswith("PG")
+                    ]
+                template = _resolve(template)
             except json.JSONDecodeError:
                 raise ConfigurationError(
                     "Invalid Runtime template JSON; check managed.template-file syntax"
@@ -305,7 +538,12 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
             if not isinstance(template, dict):
                 raise ConfigurationError("Runtime template must be an object")
         values = _resolve(
-            {str(k).replace("-", "_"): v for k, v in values.items() if k != "managed"}
+            {
+                str(k).replace("-", "_"): v
+                for k, v in values.items()
+                if k != "managed"
+                and not (auto and str(k).replace("-", "_").startswith("pg_"))
+            }
         )
         if not template and not managed.from_runtime:
             for key in (
@@ -318,11 +556,15 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
                 "model_api_key",
                 "model_name",
             ):
+                if auto and key.startswith("pg_"):
+                    continue
                 if key == "image" and managed.runtime.image:
                     continue
                 if not values.get(key) or str(values[key]).startswith("<"):
                     raise ConfigurationError(f"Missing configured field: {key}")
-        return Profile(selected, managed, values, template, admin, shared)
+        profile = Profile(selected, managed, values, template, admin, shared)
+        validate_postgres_layout(profile)
+        return profile
     except ConfigurationError:
         raise
     except ValidationError as error:
