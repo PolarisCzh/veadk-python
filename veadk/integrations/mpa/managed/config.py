@@ -25,10 +25,44 @@ from .network import NetworkOptions
 
 ADMIN_DATABASE_NAME = "mpa_admin_db"
 ADMIN_WORKSPACE_NAME = "mpa_admin_workspace"
+STUDIO_MPA_IDENTITY_FIELDS = (
+    ("VEADK_STUDIO_MPA_USER_POOL_NAME", "user_pool_name", "MPA_USER_POOL_NAME"),
+    (
+        "VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME",
+        "user_pool_client_name",
+        "MPA_USER_POOL_CLIENT_NAME",
+    ),
+    (
+        "VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL",
+        "identity_callback_url",
+        "IDENTITY_CALLBACK_URL",
+    ),
+    ("VEADK_STUDIO_MPA_IDENTITY_REGION", "identity_region", "IDENTITY_REGION"),
+)
 
 
 class ConfigurationError(ValueError):
     """A safe configuration error without user input or secret values."""
+
+
+def reuse_studio_identity(values: dict, runtime_env: dict[str, str]) -> None:
+    """Apply one complete Studio-owned Identity set without hiding YAML conflicts."""
+    stored = [
+        os.getenv(env_key, "").strip() for env_key, _, _ in STUDIO_MPA_IDENTITY_FIELDS
+    ]
+    if not any(stored):
+        return
+    if not all(stored):
+        raise ConfigurationError("Incomplete Studio MPA identity configuration")
+    for (_env_key, field, runtime_key), expected in zip(
+        STUDIO_MPA_IDENTITY_FIELDS, stored, strict=True
+    ):
+        for explicit in (values.get(field), runtime_env.get(runtime_key)):
+            if explicit and str(explicit).strip() != expected:
+                raise ConfigurationError(
+                    f"MPA identity {field} differs from Studio deployment"
+                )
+        values[field] = expected
 
 
 def validate_creation_resources(values: dict[str, str]) -> dict[str, str]:
@@ -545,6 +579,7 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
                 and not (auto and str(k).replace("-", "_").startswith("pg_"))
             }
         )
+        reuse_studio_identity(values, managed.runtime.env)
         if not template and not managed.from_runtime:
             for key in (
                 "image",

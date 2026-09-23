@@ -38,6 +38,103 @@ def test_summary_contains_no_secrets(tmp_path, monkeypatch):
     assert profile.summary()["pgPort"] == "5432"
 
 
+def test_studio_deployment_identity_is_inherited_by_managed_profile(
+    tmp_path, monkeypatch
+):
+    path = profile_file(tmp_path, monkeypatch)
+    values = {
+        "VEADK_STUDIO_MPA_USER_POOL_NAME": "studio-pool",
+        "VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME": "studio-client",
+        "VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL": "https://studio.example.com/oauth/callback",
+        "VEADK_STUDIO_MPA_IDENTITY_REGION": "cn-shanghai",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    profile = load_profile(path)
+    assert {
+        key: profile.values[key]
+        for key in (
+            "user_pool_name",
+            "user_pool_client_name",
+            "identity_callback_url",
+            "identity_region",
+        )
+    } == {
+        "user_pool_name": "studio-pool",
+        "user_pool_client_name": "studio-client",
+        "identity_callback_url": "https://studio.example.com/oauth/callback",
+        "identity_region": "cn-shanghai",
+    }
+    assert "studio-pool" not in str(profile.summary())
+
+    data = yaml.safe_load(path.read_text())
+    data.update(
+        {
+            "user-pool-name": "studio-pool",
+            "user-pool-client-name": "studio-client",
+            "identity-callback-url": "https://studio.example.com/oauth/callback",
+            "identity-region": "cn-shanghai",
+        }
+    )
+    path.write_text(yaml.safe_dump(data))
+    assert load_profile(path).values["user_pool_name"] == "studio-pool"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("user-pool-name", "different-pool"),
+        ("user-pool-client-name", "different-client"),
+        ("identity-callback-url", "https://other.example.com/oauth/callback"),
+        ("identity-region", "cn-beijing"),
+    ],
+)
+def test_studio_deployment_identity_rejects_conflicting_yaml(
+    tmp_path, monkeypatch, field, value
+):
+    path = profile_file(tmp_path, monkeypatch)
+    for key, selected in {
+        "VEADK_STUDIO_MPA_USER_POOL_NAME": "studio-pool",
+        "VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME": "studio-client",
+        "VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL": "https://studio.example.com/oauth/callback",
+        "VEADK_STUDIO_MPA_IDENTITY_REGION": "cn-shanghai",
+    }.items():
+        monkeypatch.setenv(key, selected)
+    data = yaml.safe_load(path.read_text())
+    data[field] = value
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigurationError, match="differs from Studio deployment"):
+        load_profile(path)
+
+
+def test_studio_deployment_identity_rejects_partial_and_runtime_env_conflict(
+    tmp_path, monkeypatch
+):
+    path = profile_file(tmp_path, monkeypatch)
+    monkeypatch.setenv("VEADK_STUDIO_MPA_USER_POOL_NAME", "studio-pool")
+    with pytest.raises(ConfigurationError, match="Incomplete Studio MPA identity"):
+        load_profile(path)
+    for key, value in {
+        "VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME": "studio-client",
+        "VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL": "https://studio.example.com/oauth/callback",
+        "VEADK_STUDIO_MPA_IDENTITY_REGION": "cn-shanghai",
+    }.items():
+        monkeypatch.setenv(key, value)
+    data = yaml.safe_load(path.read_text())
+    data["managed"]["runtime"] = {"env": {"MPA_USER_POOL_NAME": "other-pool"}}
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigurationError, match="differs from Studio deployment"):
+        load_profile(path)
+
+
+def test_standalone_managed_profile_keeps_explicit_identity(tmp_path, monkeypatch):
+    path = profile_file(tmp_path, monkeypatch)
+    data = yaml.safe_load(path.read_text())
+    data["user-pool-name"] = "standalone-pool"
+    path.write_text(yaml.safe_dump(data))
+    assert load_profile(path).values["user_pool_name"] == "standalone-pool"
+
+
 def split_profile_file(tmp_path, monkeypatch):
     path = profile_file(
         tmp_path,

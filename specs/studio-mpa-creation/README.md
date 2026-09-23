@@ -4,7 +4,7 @@
 
 - Component ID: `studio-mpa-creation`
 - Status: active
-- Revised: 2026-09-20
+- Revised: 2026-09-23
 - Design and evidence: [Studio MPA creation](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md)
 - Owned code: `veadk/integrations/mpa/managed/`, `frontend/server/mpa_creation.py`, `frontend/src/adk/mpaCreation.ts`, `frontend/src/ui/mpa-create/`; CLI and directory integration.
 - Tests: `tests/integrations/mpa_managed/`, `frontend/tests/mpaCreation.test.tsx`.
@@ -16,6 +16,8 @@
 VeADK owns managed YAML parsing, cloud/database orchestration, authorized durable creation tasks and the MPA directory dialog. No external source checkout is required. Shared registry/bootstrap contracts remain interoperable with the MPA image. Legacy `veadk mpa create` remains separate and unchanged. No model execution, channel routing, PostgreSQL instance provisioning or IAM policy management is added.
 
 ## Contracts
+
+- **CON-15 — Studio Identity reuse:** A cloud Studio deployment saves its UserPool name, client name, Identity region, and public MPA callback in four `VEADK_STUDIO_MPA_*` function environment values during the second release. Managed profile loading uses this complete server-owned set when YAML omits Identity values, rejects partial sets and explicit mismatches (including `managed.runtime.env`) before cloud writes, and passes the resolved values to the fixed runner. Without this set, standalone CLI/YAML behavior is unchanged. The new Runtime receives `MPA_USER_POOL_NAME`, `MPA_USER_POOL_CLIENT_NAME`, `IDENTITY_CALLBACK_URL`, and `IDENTITY_REGION`; browser requests and task persistence contain none of them. Existing Studio deployments require redeployment, and existing MPA Runtimes are unchanged. See [Identity reuse design](../../prd-spec/features/studio-mpa-identity-reuse/2026-09-23-deploy-identity-reuse.md).
 
 - **CON-1 — configuration:** The server chooses `VEADK_MPA_CREATE_CONFIG` (default `mpa-create.config.yaml`). `managed.version: 1` accepts kebab/snake aliases and rejects unknown managed keys. One profile serves one matching `cn-*` region. `from-runtime` and `template-file` are mutually exclusive; otherwise flat image/model/PG fields supply the template. `database-admin-url-env` and `shared-database-url-env` resolve PostgreSQL URLs server-side. Files/templates are limited to 256 KiB. HTTP clients cannot choose paths, commands, accounts or credentials. Configuration checks are local; they do not prove live access.
 - **CON-2 — preparation:** Operators supply PostgreSQL instance/registry/login/owner, IAM roles, images, model access and network connectivity. Verify cloud account and database permissions before preparing account VPC/subnet, APIG/IM Gateway, worker, isolated business database, Skill Space and Runtime. Explicit APIG adoption requires a configured matching VPC. Never assume a newly created VPC reaches private PostgreSQL. Release account locks before waiting for application readiness.

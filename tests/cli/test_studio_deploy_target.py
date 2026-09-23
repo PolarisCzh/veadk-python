@@ -1306,48 +1306,53 @@ def test_studio_deploy_persists_studio_context_environment(
     )
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
-        lambda **_: "cn-beijing",
+        lambda **_: "cn-shanghai",
     )
     monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.get_user_pool_resource_names",
+        lambda _self, pool_uid, client_uid: (
+            "studio-userpool" if pool_uid == "pool-id" else "wrong-pool",
+            "studio-client" if client_uid == "client-id" else "wrong-client",
+        ),
+    )
+    monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
         lambda *_args, **_kwargs: None,
     )
-    result = CliRunner().invoke(
-        studio,
-        [
-            "deploy",
-            "--provider",
-            "volcengine",
-            "--user-pool-id",
-            "pool-id",
-            "--allowed-client-id",
-            "client-id",
-            "--vefaas-app-name",
-            "studio-app",
-            "--sandbox-chat-codex-tool-id",
-            "chat-code-env-id",
-            "--sandbox-chat-openclaw-tool-id",
-            "openclaw-tool-id",
-            "--sandbox-chat-hermes-tool-id",
-            "hermes-tool-id",
-            "--iam-role",
-            "trn:iam::role/test",
-            "--environment-cp-workspace",
-            "cp-workspace-id",
-            "--environment-cr-repository",
-            "registry/namespace/environment-images",
-            "--gateway-name",
-            "gateway",
-            "--volcengine-access-key",
-            "ak-for-deployer",
-            "--volcengine-secret-key",
-            "sk-for-deployer",
-        ],
-    )
+    deploy_args = [
+        "deploy",
+        "--provider",
+        "volcengine",
+        "--user-pool-id",
+        "pool-id",
+        "--allowed-client-id",
+        "client-id",
+        "--vefaas-app-name",
+        "studio-app",
+        "--sandbox-chat-codex-tool-id",
+        "chat-code-env-id",
+        "--sandbox-chat-openclaw-tool-id",
+        "openclaw-tool-id",
+        "--sandbox-chat-hermes-tool-id",
+        "hermes-tool-id",
+        "--iam-role",
+        "trn:iam::role/test",
+        "--environment-cp-workspace",
+        "cp-workspace-id",
+        "--environment-cr-repository",
+        "registry/namespace/environment-images",
+        "--gateway-name",
+        "gateway",
+        "--volcengine-access-key",
+        "ak-for-deployer",
+        "--volcengine-secret-key",
+        "sk-for-deployer",
+    ]
+    result = CliRunner().invoke(studio, deploy_args)
 
     assert result.exit_code == 0, result.output
     deploy_id = veadk_environments["VEADK_STUDIO_DEPLOY_ID"]
@@ -1366,11 +1371,31 @@ def test_studio_deploy_persists_studio_context_environment(
     assert release_environment["OAUTH2_REDIRECT_URI"] == (
         "https://studio.example.com/oauth2/callback"
     )
+    assert release_environment["VEADK_STUDIO_MPA_USER_POOL_NAME"] == "studio-userpool"
+    assert (
+        release_environment["VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+    )
+    assert release_environment["VEADK_STUDIO_MPA_IDENTITY_REGION"] == "cn-shanghai"
+    assert release_environment["VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL"] == (
+        "https://studio.example.com/oauth/callback"
+    )
     assert release_environment["VEADK_STUDIO_DEPLOY_ID"] == deploy_id
     assert release_environment["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
     assert release_environment["VEADK_STUDIO_ACCOUNT_ID"] == "2100123456"
     assert release_environment["VEADK_STUDIO_APPLICATION_ID"] == "app-id"
     assert release_environment["VEADK_STUDIO_FUNCTION_ID"] == "function-id"
+
+    def unavailable_names(*_args: object) -> tuple[str, str]:
+        raise RuntimeError("private-sdk-error-with-secret")
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.get_user_pool_resource_names",
+        unavailable_names,
+    )
+    failed = CliRunner().invoke(studio, deploy_args)
+    assert failed.exit_code != 0
+    assert "Unable to resolve Studio UserPool/client names" in failed.output
+    assert "private-sdk-error-with-secret" not in failed.output
 
 
 def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(

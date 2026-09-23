@@ -4,7 +4,7 @@
 
 - 组件 ID：`studio-mpa-creation`
 - 状态：active
-- 修订日期：2026-09-20
+- 修订日期：2026-09-23
 - 设计及证据：[Studio MPA 创建](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.zh.md)
 - 所属代码：`veadk/integrations/mpa/managed/`、`frontend/server/mpa_creation.py`、`frontend/src/adk/mpaCreation.ts`、`frontend/src/ui/mpa-create/`；CLI 和目录接入。
 - 测试：`tests/integrations/mpa_managed/`、`frontend/tests/mpaCreation.test.tsx`。
@@ -16,6 +16,8 @@
 VeADK 负责托管 YAML 解析、云服务/数据库编排、有权限约束的持久创建任务和 MPA 目录窗口。无需外部源码仓库。共享注册/初始化协议与 MPA 镜像互通。旧 `veadk mpa create` 独立保留且行为不变。不增加模型执行、渠道路由、PostgreSQL 实例创建或 IAM 策略管理。
 
 ## 契约
+
+- **CON-15 — Studio 身份复用：**云上 Studio 部署在第二次发布中将 UserPool 名称、客户端名称、Identity 地域和公网 MPA 回调保存为四项 `VEADK_STUDIO_MPA_*` 函数环境变量。托管配置加载在 YAML 未指定身份值时使用这组完整的服务端配置，并在云写入前拒绝不完整配置与显式冲突（包括 `managed.runtime.env`）；固定子进程读取相同值。没有这组配置时，独立 CLI/YAML 行为不变。新 Runtime 获得 `MPA_USER_POOL_NAME`、`MPA_USER_POOL_CLIENT_NAME`、`IDENTITY_CALLBACK_URL`、`IDENTITY_REGION`；浏览器请求和任务持久化均不包含这些值。已有云上 Studio 需要重新部署，已有 MPA Runtime 不变。参见[身份复用设计](../../prd-spec/features/studio-mpa-identity-reuse/2026-09-23-deploy-identity-reuse.zh.md)。
 
 - **CON-1 — 配置：** 服务端选择 `VEADK_MPA_CREATE_CONFIG`（默认 `mpa-create.config.yaml`）。`managed.version: 1` 接受短横线/下划线别名，拒绝未知 managed 字段。一个配置服务一个匹配的 `cn-*` 地域。`from-runtime` 与 `template-file` 互斥，否则通过平铺镜像/模型/PG 字段构建模板。`database-admin-url-env` 与 `shared-database-url-env` 在服务端解析 PostgreSQL URL。配置/模板文件最多 256 KiB。HTTP 客户端不能选择路径、命令、账号或凭据。配置检查仅限本地，不证明真实访问权限。
 - **CON-2 — 准备：** 运维提供 PostgreSQL 实例/注册库/登录用户/属主、IAM 角色、镜像、模型权限和网络连通性。先核验云账号及数据库权限，再准备账号 VPC/子网、APIG/IM Gateway、worker、独立业务库、Skill Space 和 Runtime。显式接管 APIG 要求配置匹配 VPC。不得假设新 VPC 可访问私网 PostgreSQL。等待应用就绪前释放账号锁。

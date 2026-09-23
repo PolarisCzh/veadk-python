@@ -53,6 +53,8 @@ managed:
 
 ## 在 Studio 使用
 
+新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。私有 YAML 可省略这四项；若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
+
 选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。三步依次填写基础信息、已有 PostgreSQL 实例主机/端口，以及可选的 OpenViking 服务地址/资源 ID。生成的智能体 ID 为只读。PG 步骤提供[火山引擎 AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)入口；主机/端口必须与服务端配置的管理员连接一致。OpenViking 步骤提供[上下文管理控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default)入口；该页面地址不是要填写的服务地址。PG 凭据和 OpenViking API Key 仍由服务端配置。查看资源计划后在第三步提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
 
 最初的配置检查是本地校验，**不代表**真实权限或连通性已通过。提交后、创建资源前会检查云账号和数据库权限；后续各云步骤检查自身响应。关闭窗口可让创建继续，显式取消才停止编排。在同一浏览器会话重新打开可恢复进度。窗口支持键盘、多行中文输入、两种主题和窄窗口。

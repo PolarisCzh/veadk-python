@@ -124,6 +124,8 @@ def apply_identity_settings(template: dict, values: dict):
         )
     env = env_map(template)
     env.update(identity_env)
+    if values.get("identity_region"):
+        env["IDENTITY_REGION"] = str(values["identity_region"]).strip()
     env["IDENTITY_STARTUP_ENABLED"] = "true"
     template["Envs"] = [{"Key": key, "Value": value} for key, value in env.items()]
 

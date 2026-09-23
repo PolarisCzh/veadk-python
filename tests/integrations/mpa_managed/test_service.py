@@ -325,12 +325,14 @@ def test_managed_identity_settings_override_template_and_require_complete_pair()
             "user_pool_name": "studio-pool",
             "user_pool_client_name": "studio-client",
             "identity_callback_url": "https://studio.example.com/oauth/callback",
+            "identity_region": "cn-shanghai",
         },
     )
     env = service.env_map(source)
     assert env["MPA_USER_POOL_NAME"] == "studio-pool"
     assert env["MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
     assert env["IDENTITY_CALLBACK_URL"] == "https://studio.example.com/oauth/callback"
+    assert env["IDENTITY_REGION"] == "cn-shanghai"
     assert env["IDENTITY_STARTUP_ENABLED"] == "true"
 
     with pytest.raises(ConfigurationError, match="MPA_USER_POOL_CLIENT_NAME"):

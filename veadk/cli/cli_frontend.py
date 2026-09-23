@@ -17874,9 +17874,24 @@ def frontend_deploy(
         #    OAuth redirect and re-release so in-app SSO points at this endpoint.
         function_id = getattr(app, "vefaas_function_id", "")
         if url and function_id:
+            try:
+                mpa_pool_name, mpa_client_name = (
+                    identity_client.get_user_pool_resource_names(
+                        str(user_pool_id), str(allowed_client_id)
+                    )
+                )
+            except Exception:
+                raise click.ClickException(
+                    "Unable to resolve Studio UserPool/client names for MPA creation; "
+                    "check Identity read permissions."
+                ) from None
             click.echo(f"Setting OAUTH2_REDIRECT_URI={redirect_uri} and re-releasing…")
             release_environment = {
                 "OAUTH2_REDIRECT_URI": redirect_uri,
+                "VEADK_STUDIO_MPA_USER_POOL_NAME": mpa_pool_name,
+                "VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME": mpa_client_name,
+                "VEADK_STUDIO_MPA_IDENTITY_REGION": identity_region,
+                "VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL": mpa_callback_uri,
                 "VEADK_STUDIO_DEPLOY_ID": studio_deploy_id,
                 "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": vefaas_app_name,
                 "VEADK_STUDIO_USER_POOL_ID": veadk_environments[
