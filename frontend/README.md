@@ -1005,6 +1005,15 @@ key-auth Runtime by `MPA_AGENT_ID` and calls its `/identity/oauth/callback`
 endpoint from the server. The browser never receives the Runtime endpoint or
 API key.
 
+For Studio web chat with an MPA Runtime, the Studio server refreshes the signed-in
+user's UserPool session before each run and prewarms the Runtime's
+`/identity/sessions/put` using the server-held Runtime key. The ID token stays
+server-side and out of the browser session cookie. This requires Studio and MPA
+to use the same UserPool client, a refresh-backed Studio login, and an MPA
+Runtime that recognizes Studio's `x-user-id` as the user identity. If the
+handoff fails, chat continues and MPA can ask the user to log in normally.
+Feishu chat keeps its separate manual login flow.
+
 After automatic provisioning, the success summary lists every Sandbox type and
 Tool ID, the private Studio TOS address, and the resolved Identity user pool and
 client IDs. It also links to the matching Volcengine or BytePlus Identity

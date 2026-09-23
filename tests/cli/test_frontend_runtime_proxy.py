@@ -20,6 +20,7 @@ from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
 from typing import Any, ClassVar
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -32,6 +33,7 @@ from frontend.server.studio_tools import (
     StudioToolExecutionContext,
 )
 from veadk.cli import cli_frontend
+from veadk.auth.middleware.oauth2_auth import OAuth2Session
 from veadk.cli.cli_frontend import (
     _build_agentkit_proxy_headers,
     _frontend_allow_origins,
@@ -1383,6 +1385,167 @@ def _create_frontend_app(
         studio=studio,
     )
     return captured["app"]
+
+
+def test_mpa_identity_prewarm_uses_trusted_session_and_runtime_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    session = OAuth2Session(
+        access_token="access-token",
+        expires_at=9999999999,
+        refresh_token="refresh-token",
+        user_info={"sub": "studio-user"},
+    )
+    refreshed = session.model_copy(
+        update={"id_token": "id-token", "refresh_token": "rotated-refresh-token"}
+    )
+    handler = Mock()
+    handler.get_session_from_request.return_value = session
+    handler.refresh_access_token = AsyncMock(return_value=refreshed)
+    handler.validate_id_token = AsyncMock(return_value={"sub": "studio-user"})
+    app.state.oauth2_handler = handler
+
+    @app.middleware("http")
+    async def _set_oauth_session(request: Request, call_next):
+        request.state.oauth2_session = session
+        if request.headers.get("X-Test-Principal") == "empty":
+            request.state.studio_identity_principal = SimpleNamespace(owner_id="")
+        return await call_next(request)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            is_jwt = request.runtime_id == "runtime-jwt"
+            return SimpleNamespace(
+                runtime_id=request.runtime_id,
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=None if is_jwt else SimpleNamespace(api_key="runtime-key"),
+                    custom_jwt_authorizer=SimpleNamespace() if is_jwt else None,
+                ),
+                tags=[
+                    SimpleNamespace(
+                        key="veadk:agent-type",
+                        value="general"
+                        if request.runtime_id == "runtime-general"
+                        else "mpa",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+    calls: list[dict[str, Any]] = []
+    fail_upstream = {"enabled": False}
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, url: str, **kwargs: Any):
+            calls.append({"url": url, **kwargs})
+            if fail_upstream["enabled"]:
+                raise httpx.RequestError(
+                    "unavailable", request=httpx.Request("POST", url)
+                )
+            return SimpleNamespace(raise_for_status=lambda: None)
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/mpa/identity-prewarm/runtime-1?region=cn-beijing",
+            headers={
+                "X-Requested-With": "XMLHttpRequest",
+                "X-User-Id": "attacker",
+            },
+        )
+        handler.validate_id_token.return_value = {"sub": "different-user"}
+        mismatch = client.post(
+            "/web/mpa/identity-prewarm/runtime-1?region=cn-beijing",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        handler.validate_id_token.return_value = {"sub": "studio-user"}
+        handler.refresh_access_token.return_value = None
+        refresh_failed = client.post(
+            "/web/mpa/identity-prewarm/runtime-1?region=cn-beijing",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        handler.refresh_access_token.return_value = refreshed
+        no_principal = client.post(
+            "/web/mpa/identity-prewarm/runtime-1?region=cn-beijing",
+            headers={
+                "X-Requested-With": "XMLHttpRequest",
+                "X-Test-Principal": "empty",
+            },
+        )
+        not_mpa = client.post(
+            "/web/mpa/identity-prewarm/runtime-general?region=cn-beijing",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        not_key_auth = client.post(
+            "/web/mpa/identity-prewarm/runtime-jwt?region=cn-beijing",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        handler.refresh_access_token.return_value = refreshed.model_copy(
+            update={"id_token": None}
+        )
+        missing_id_token = client.post(
+            "/web/mpa/identity-prewarm/runtime-1?region=cn-beijing",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        handler.refresh_access_token.return_value = refreshed
+        fail_upstream["enabled"] = True
+        upstream_failed = client.post(
+            "/web/mpa/identity-prewarm/runtime-1?region=cn-beijing",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls[0] == {
+        "url": "https://runtime.example/identity/sessions/put",
+        "headers": {"Authorization": "Bearer runtime-key"},
+        "json": {"idToken": "id-token", "refreshToken": "rotated-refresh-token"},
+    }
+    assert "id-token" not in response.text
+    assert mismatch.status_code == 403
+    assert refresh_failed.status_code == 401
+    assert no_principal.status_code == 401
+    assert not_mpa.status_code == 400
+    assert not_key_auth.status_code == 409
+    assert missing_id_token.status_code == 502
+    assert upstream_failed.status_code == 502
+    assert len(calls) == 2
+    assert handler.validate_id_token.await_count == 3
+
+
+def test_mpa_identity_prewarm_requires_studio_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        missing_header = client.post("/web/mpa/identity-prewarm/runtime-1")
+        missing_session = client.post(
+            "/web/mpa/identity-prewarm/runtime-1",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+    assert missing_header.status_code == 403
+    assert missing_session.status_code == 409
 
 
 def test_proxy_headers_do_not_forward_unvalidated_authorization() -> None:

@@ -2348,10 +2348,31 @@ export async function* runSSE({
           ...(executionMetadata ?? {}),
         }
       : undefined;
+  const isMpa = isMpaEndpoint(app, ep);
+  if (isMpa && ep.runtimeId) {
+    const region = ep.region ? `?region=${encodeURIComponent(ep.region)}` : "";
+    try {
+      const prewarm = await studioFetch(
+        `/web/mpa/identity-prewarm/${encodeURIComponent(ep.runtimeId)}${region}`,
+        {
+          method: "POST",
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+          signal,
+        },
+        10_000,
+      );
+      if (!prewarm.ok) {
+        console.warn("[mpa] identity prewarm unavailable", prewarm.status);
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      console.warn("[mpa] identity prewarm unavailable");
+    }
+  }
   let res: Response;
   const firstEventDeadline = runSseFirstEventDeadline(signal);
   try {
-    if (isMpaEndpoint(app, ep)) {
+    if (isMpa) {
       const runRes = await apiFetch(
         `/api/v1/sessions/${encodeURIComponent(sessionId)}/run`,
         {

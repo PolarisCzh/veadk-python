@@ -4610,6 +4610,70 @@ def _run_frontend_server(
         ]
         return {"mounted": True, "results": results}
 
+    @app.post("/web/mpa/identity-prewarm/{runtime_id}")
+    async def _mpa_identity_prewarm(runtime_id: str, request: Request):
+        """Hand the logged-in Studio user's fresh OIDC tokens to one MPA Runtime."""
+        if request.headers.get("x-requested-with", "").lower() != "xmlhttprequest":
+            raise HTTPException(status_code=403, detail="studio_request_required")
+        oauth2_handler = getattr(app.state, "oauth2_handler", None)
+        session = getattr(request.state, "oauth2_session", None)
+        if oauth2_handler is None or session is None or not session.can_refresh():
+            raise HTTPException(status_code=409, detail="studio_oauth_session_required")
+        principal = _current_principal(request)
+        if principal is None or not principal.owner_id:
+            raise HTTPException(status_code=401, detail="studio_identity_required")
+
+        region = _coerce_cloud_region(request.query_params.get("region"))
+        runtime = await asyncio.to_thread(
+            _authorized_runtime_for_connection, request, runtime_id, region
+        )
+        if _runtime_agent_category(runtime, _runtime_tags(runtime)) != "mpa":
+            raise HTTPException(status_code=400, detail="mpa_runtime_required")
+        endpoint, apikey, auth_type, network_type = _resolve_runtime_conn(
+            runtime_id, region, runtime
+        )
+        if auth_type != "key_auth" or not apikey or network_type != "public":
+            raise HTTPException(status_code=409, detail="mpa_key_auth_required")
+
+        refreshed = await oauth2_handler.refresh_access_token(session)
+        if refreshed is None:
+            raise HTTPException(status_code=401, detail="studio_session_refresh_failed")
+        # The provider may rotate refresh tokens even when its ID-token
+        # response is unusable. Always return the newest browser session.
+        request.state.oauth2_session_override = refreshed
+        if not refreshed.id_token or not refreshed.refresh_token:
+            raise HTTPException(status_code=502, detail="userpool_id_token_missing")
+        claims = await oauth2_handler.validate_id_token(refreshed.id_token)
+        if claims.get("sub") != principal.owner_id:
+            raise HTTPException(status_code=403, detail="studio_user_mismatch")
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    f"{endpoint.rstrip('/')}/identity/sessions/put",
+                    headers={
+                        "Authorization": _agentkit_authorization_header(apikey),
+                    },
+                    json={
+                        "idToken": refreshed.id_token,
+                        "refreshToken": refreshed.refresh_token,
+                    },
+                )
+            response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as error:
+            logger.warning(
+                "MPA identity prewarm failed runtime_id=%s region=%s status=%s",
+                runtime_id,
+                region,
+                getattr(
+                    getattr(error, "response", None), "status_code", "network_error"
+                ),
+            )
+            raise HTTPException(
+                status_code=502, detail="mpa_identity_prewarm_failed"
+            ) from error
+        return {"ok": True}
+
     # ---- Skill Hub proxy: proxy /skillhub/* to skills.volces.com ----
     SKILLHUB_TARGET = "https://skills.volces.com"
 

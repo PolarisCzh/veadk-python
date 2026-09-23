@@ -582,8 +582,11 @@ test("runSSE resumes an MPA runtime stream from the last event id", async (t) =>
     captured.push({
       url: String(url),
       headers: new Headers(init.headers),
-      body: JSON.parse(String(init.body)),
+      body: init?.body ? JSON.parse(String(init.body)) : null,
     });
+    if (String(url).includes("/web/mpa/identity-prewarm/")) {
+      return Response.json({ ok: true });
+    }
     if (String(url).includes("/api/v1/sessions/session/run")) {
       return Response.json({
         sessionId: "session",
@@ -615,15 +618,16 @@ test("runSSE resumes an MPA runtime stream from the last event id", async (t) =>
   const first = await events.next();
   assert.equal(first.done, false);
   assert.equal(first.value.id, "event-after-refresh");
-  assert.equal(captured.length, 2);
-  assert.match(captured[0].url, /\/web\/runtime-proxy\/runtime-1\/api\/v1\/sessions\/session\/run/);
-  assert.equal(captured[0].headers.get("Idempotency-Key"), "turn-key-1");
-  assert.deepEqual(captured[0].body, {
+  assert.equal(captured.length, 3);
+  assert.match(captured[0].url, /\/web\/mpa\/identity-prewarm\/runtime-1/);
+  assert.match(captured[1].url, /\/web\/runtime-proxy\/runtime-1\/api\/v1\/sessions\/session\/run/);
+  assert.equal(captured[1].headers.get("Idempotency-Key"), "turn-key-1");
+  assert.deepEqual(captured[1].body, {
     content: "hello",
     executionConfigVersion: 7,
   });
-  assert.match(captured[1].url, /\/web\/runtime-proxy\/runtime-1\/api\/v1\/sessions\/session\/sse/);
-  assert.deepEqual(captured[1].body, {
+  assert.match(captured[2].url, /\/web\/runtime-proxy\/runtime-1\/api\/v1\/sessions\/session\/sse/);
+  assert.deepEqual(captured[2].body, {
     invocationId: "e-accepted",
     lastEventId: "event-before-refresh",
   });
@@ -703,6 +707,9 @@ test("runSSE forwards zero execution config revisions for initial MPA sessions",
       url: String(url),
       body: init?.body ? JSON.parse(String(init.body)) : null,
     });
+    if (String(url).includes("/web/mpa/identity-prewarm/")) {
+      return Response.json({ ok: true });
+    }
     if (String(url).includes("/api/v1/sessions/session/run")) {
       return Response.json({
         sessionId: "session",
@@ -732,7 +739,7 @@ test("runSSE forwards zero execution config revisions for initial MPA sessions",
 
   await events.next();
 
-  assert.deepEqual(captured[0].body, {
+  assert.deepEqual(captured[1].body, {
     content: "hello",
     executionConfigVersion: 0,
   });
