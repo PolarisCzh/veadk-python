@@ -340,6 +340,8 @@ async def provision(
         await registry.initialize()
         async with registry.lock(account, profile.region, agent_id) as entry:
             record = await entry.read()
+            if record.get("state") in {"deleting", "deleted"}:
+                raise DeploymentError("Agent deletion has started; use a new agent ID")
             if record and record.get("studio_owner") != owner:
                 raise DeploymentError(
                     "Agent belongs to another owner; use a new agent ID"

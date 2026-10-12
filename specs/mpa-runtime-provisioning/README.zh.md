@@ -2,7 +2,7 @@
 
 - **Component ID：** `mpa-runtime-provisioning`
 - **状态：** 草案；提议变更由关联 PRD 管理
-- **修订日期：** 2026-10-09
+- **修订日期：** 2026-10-12
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
@@ -128,3 +128,7 @@ Runtime 创建在 CreateRuntime/UpdateRuntime 前注入 `MCP_TOKEN_SECRET`。显
 Worker 环境配置及模板优先级遵循 [Studio 契约](../studio-mpa-creation/README.zh.md#独立-worker-配置)。内置 Studio 不依赖旧账号 Tool。保留显式 CLI 模板/已有 ID；非托管旧创建逻辑不变。
 
 托管 Runtime 的子网等价判断和稳定重试顺序遵循 [Studio 网络恢复契约](../studio-mpa-creation/README.zh.md#runtime-子网顺序与恢复)。
+
+## MPA 独占资源删除（2026-10-12，已实现）
+
+本变更替代删除契约中的 Profile 前置条件：预览与执行不查询 Profile，仅活动操作和运行会话阻止删除；会话查询失败必须可见。MPA 删除在既有会话清理后，按顺序清理已证明独占的受管沙箱模板、Skill Space，再删除 Runtime。依据为账号/地域注册记录、匹配的资源标签和其他部署/Runtime 引用检查；共享、导入或归属不明资源保留。清理状态持久保存，部分失败可重试；其他资源与通用 Runtime 删除不变。加载、错误、预览重试及取消在详情页确认弹窗可见。详见[设计](../../prd-spec/features/mpa-owned-resource-deletion/2026-10-12-owned-resource-deletion.zh.md)。

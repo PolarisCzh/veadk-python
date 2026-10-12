@@ -1862,3 +1862,9 @@ Generic structured/YAML creation retains the ordinary build, deploy and publish 
 ### 通用与 MPA 部署隔离
 
 通用结构化/YAML 创建保留原构建、部署和发布流程（以及选中的实例配置、评测和 GitHub 选项）。仅明确标识为 MPA 的目标执行 Profile/smoke 阶段。本地草稿按类型筛选；无明确 MPA 意图的旧草稿默认通用。此修改不会修复旧版本已写入的云端 Runtime 标签。
+
+### Deleting MPA agents / 删除 MPA 智能体
+
+MPA deletion checks sessions and active lifecycle operations without querying Profile. Confirmation lists exclusive managed sandbox templates and Skill Spaces to delete, and shared or unproven resources to retain. Cleanup failures keep Runtime available for retry; databases, Workspaces, network, APIG and other resources remain. General agents use their existing Runtime deletion flow. Check errors are shown in the confirmation dialog and can be retried or cancelled. Restart Studio after updating the backend. Session authentication remains required; deletion forwards the same server-authenticated user identity as chat.
+
+MPA 删除检查会话和活动生命周期操作，不查询 Profile。确认弹窗列出待删除的独占受管沙箱模板、Skill Space，以及保留的共享或归属不明资源。清理失败保留 Runtime 供重试；数据库、Workspace、网络、APIG 及其他资源保留。通用智能体沿用现有 Runtime 删除流程。检查错误在弹窗内显示，可重新检查或取消。更新后端后需重启 Studio；会话接口仍需通过鉴权；删除流程传递与聊天一致的服务端已认证用户身份。

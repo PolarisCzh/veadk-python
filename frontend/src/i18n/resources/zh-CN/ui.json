@@ -405,7 +405,7 @@
     "deleteDraftDescription": "确定删除草稿“{{name}}”吗？",
     "deleteAgent": "删除 Agent",
     "closeDeleteConfirmation": "关闭删除确认",
-    "mpaDeletePreviewSummary": "Studio 会先删除可见的空闲 MPA Runtime 会话，再删除 AgentKit Runtime。运行中的任务需要先结束或停止后才能删除。",
+    "mpaDeletePreviewSummary": "Studio 将清理可见的空闲会话、该 MPA 独占的沙箱模板和 Skill Space，最后删除 Runtime。数据库及共享资源保留；运行中的任务需先结束或停止。",
     "mpaDeletePreviewSessions": "会话",
     "mpaDeletePreviewActiveSessions": "运行中",
     "mpaDeletePreviewIdleSessions": "空闲",
@@ -418,7 +418,9 @@
     "mpaDeleteStage": {
       "runtime_sessions": "删除 {{count}} 个可见空闲 Runtime 会话",
       "runtime_diagnostics": "清理这些会话关联的诊断数据和挂载元信息",
-      "agentkit_runtime": "删除 AgentKit Runtime"
+      "agentkit_runtime": "删除 AgentKit Runtime",
+      "worker_template": "删除独占沙箱模板",
+      "skill_space": "删除独占 Skill Space（含空间内技能）"
     },
     "draftDeletionWarning": "草稿将从当前浏览器中删除。",
     "runtimeDeletionWarning": "Runtime 和相关云端资源将被删除。",
@@ -543,6 +545,14 @@
       "updateConfigRestoring": "正在恢复更新配置",
       "updateUnsupported": "当前 Runtime 不支持更新",
       "usageMismatch": "返回的使用数据与当前 Agent 不匹配"
+    },
+    "mpaDeleteChecking": "正在检查会话和资源归属…",
+    "mpaDeleteRetryPreview": "重新检查",
+    "mpaDeletePreviewFailed": "删除前检查失败。请处理下面的错误后重新检查。",
+    "mpaDeleteRetained": "以下资源将保留",
+    "mpaDeleteRetainedReason": {
+      "shared": "有其他智能体引用",
+      "unproven": "无法确认是此智能体独占的受管资源"
     }
   },
   "environmentCenter": {

@@ -405,7 +405,7 @@
     "deleteDraftDescription": "Delete draft “{{name}}”?",
     "deleteAgent": "Delete Agent",
     "closeDeleteConfirmation": "Close delete confirmation",
-    "mpaDeletePreviewSummary": "Studio will delete visible idle MPA Runtime sessions first, then delete the AgentKit Runtime. Running work must finish or be stopped before deletion.",
+    "mpaDeletePreviewSummary": "Studio will clean visible idle sessions, this MPA’s exclusive sandbox template and Skill Space, then delete the Runtime. Databases and shared resources remain; running work must finish or stop first.",
     "mpaDeletePreviewSessions": "Sessions",
     "mpaDeletePreviewActiveSessions": "Active",
     "mpaDeletePreviewIdleSessions": "Idle",
@@ -418,7 +418,9 @@
     "mpaDeleteStage": {
       "runtime_sessions": "Delete {{count}} visible idle Runtime sessions",
       "runtime_diagnostics": "Remove diagnostics and mounted metadata owned by those sessions",
-      "agentkit_runtime": "Delete the AgentKit Runtime"
+      "agentkit_runtime": "Delete the AgentKit Runtime",
+      "worker_template": "Delete exclusive sandbox template",
+      "skill_space": "Delete exclusive Skill Space (including its skills)"
     },
     "draftDeletionWarning": "The draft will be removed from this browser.",
     "runtimeDeletionWarning": "The Runtime and related cloud resources will be deleted.",
@@ -543,6 +545,14 @@
       "updateConfigRestoring": "Restoring update configuration",
       "updateUnsupported": "This Runtime cannot be updated",
       "usageMismatch": "The returned usage data does not match this Agent"
+    },
+    "mpaDeleteChecking": "Checking sessions and resource ownership…",
+    "mpaDeleteRetryPreview": "Check again",
+    "mpaDeletePreviewFailed": "Deletion checks failed. Resolve the error below and check again.",
+    "mpaDeleteRetained": "Resources to retain",
+    "mpaDeleteRetainedReason": {
+      "shared": "Referenced by another agent",
+      "unproven": "Exclusive managed ownership could not be verified"
     }
   },
   "environmentCenter": {

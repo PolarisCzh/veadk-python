@@ -2,7 +2,7 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-10-09
+- **Revision:** 2026-10-12
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
@@ -138,3 +138,7 @@ New shared standard gateways and cross-zone companion intents follow the [Studio
 Worker environment configuration and reference precedence follow the [Studio contract](../studio-mpa-creation/README.md#independent-worker-configuration). Built-in Studio does not require an old-account Tool. Explicit CLI references/existing IDs remain supported; legacy non-managed creation is unchanged.
 
 Managed Runtime subnet equality and stable retry ordering follow the [Studio network recovery contract](../studio-mpa-creation/README.md#runtime-subnet-ordering-and-recovery).
+
+## MPA owned-resource deletion (2026-10-12, implemented)
+
+This change supersedes the Profile prerequisite in the deletion contract: preview/execution do not query Profile; only active operations and active sessions block deletion, and session-query errors remain visible. After session cleanup, MPA deletion removes proven exclusive managed worker templates and Skill Spaces, then Runtime. Proof requires account/region deployment records, matching ownership tags and checks for other deployment/Runtime references. Shared, imported or unproven resources remain. Persist cleanup state for partial-failure retries; other resources and general Runtime deletion remain unchanged. Loading, errors, preview retry and cancellation are visible in the detail confirmation dialog. See the [design](../../prd-spec/features/mpa-owned-resource-deletion/2026-10-12-owned-resource-deletion.md).

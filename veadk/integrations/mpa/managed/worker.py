@@ -58,6 +58,9 @@ class WorkerCloud:
     async def get(self, tool_id):
         return await self.call("get_tool", "GetToolRequest", ToolId=tool_id)
 
+    async def delete(self, tool_id):
+        await self.call("delete_tool", "DeleteToolRequest", ToolId=tool_id)
+
     async def create(self, request):
         return (await self.call("create_tool", "CreateToolRequest", **request)).get(
             "ToolId", ""
@@ -130,6 +133,8 @@ async def _ensure_worker(
     entry, cloud, options, *, account, region, agent_id, project, runtime_name
 ):
     record = await entry.read()
+    if record.get("state") in {"deleting", "deleted"}:
+        raise DeploymentError("Agent deletion has started; use a new agent ID")
     suffix = agent_suffix(account, region, agent_id)
     owned = {"managed_by": "mpa-deployment", "mpa_agent_key": suffix}
     tool_id = record.get("worker_id") or options.existing_id

@@ -2650,7 +2650,9 @@ export interface MpaAgentDeletePreview {
     stage: string;
     description: string;
     count: number;
+    resourceId?: string;
   }>;
+  retainedResources?: Array<{ stage: string; resourceId: string; reason: string }>;
 }
 
 export interface MpaRuntimeConsoleRun {

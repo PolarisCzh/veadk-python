@@ -140,6 +140,16 @@ class AgentDeploymentEntry:
         await self.conn.execute(query)
         await self.conn.commit()
 
+    async def other_records(self):
+        query = select(agent_deployments.c.record).where(
+            agent_deployments.c.account_id == self.keys["account_id"],
+            agent_deployments.c.region == self.keys["region"],
+            agent_deployments.c.agent_id != self.keys["agent_id"],
+        )
+        records = (await self.conn.execute(query)).scalars().all()
+        await self.conn.commit()
+        return [dict(record) for record in records]
+
 
 class AccountNetworkEntry:
     def __init__(self, conn, account, region):
