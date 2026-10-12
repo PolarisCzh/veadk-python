@@ -135,6 +135,7 @@ async def _ensure_worker(
             tos_secret_key=options.tos_secret_key,
             tos_bucket=options.tos_bucket,
             region=region,
+            tos_credential_type=options.tos_credential_type,
         ).model_dump(by_alias=True, exclude_none=True, mode="json")
     if (
         record.get("worker_id")
@@ -249,6 +250,7 @@ async def _ensure_worker(
             agent_id=agent_id,
             managed=bool(record.get("worker_managed")),
             expected_tos=expected_tos,
+            expected_role=options.role_name,
         )
         status = tool.get("Status")
         if status in {"Failed", "Error", "Deleted", "Deleting"}:
@@ -291,13 +293,27 @@ async def _ensure_worker(
 
 
 def _missing_worker_metadata(
-    tool, *, tool_id, project, owned, agent_id, managed, expected_tos=None
+    tool,
+    *,
+    tool_id,
+    project,
+    owned,
+    agent_id,
+    managed,
+    expected_tos=None,
+    expected_role=None,
 ):
     """Reject any present conflict before considering incomplete metadata."""
     tags = {t["Key"]: t.get("Value") for t in tool.get("Tags") or []}
     env = {t["Key"]: t.get("Value") for t in tool.get("Envs") or []}
     if expected_tos:
         actual = tool.get("TosMountConfig") or {}
+        if expected_tos.get("CredentialType") == "TOS_CREDENTIAL_TYPE_IAM_ROLE" and (
+            actual.get("CredentialType") != "TOS_CREDENTIAL_TYPE_IAM_ROLE"
+            or actual.get("Credentials")
+            or tool.get("RoleName") != expected_role
+        ):
+            raise DeploymentError("Worker TOS IAM role metadata conflicts")
         actual_mounts = actual.get("MountPoints") or []
         expected_mount = expected_tos["MountPoints"][0]
         if not actual.get("EnableTos") or not any(

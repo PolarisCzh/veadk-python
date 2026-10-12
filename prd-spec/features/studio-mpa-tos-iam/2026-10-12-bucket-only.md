@@ -1,0 +1,178 @@
+# Studio MPA TOS IAM mount
+
+[中文版](2026-10-12-bucket-only.zh.md)
+
+- Change ID: `studio-mpa-tos-iam`
+- Date: 2026-10-12
+- Status: implemented; targeted checks verified; baseline-wide gates blocked; cloud not_run
+- Base: `superops/main`, `035387d1`
+- Contract: [Studio MPA creation](../../../specs/studio-mpa-creation/README.md), CON-17.
+
+## Background and scope
+
+Studio currently requires `tosAccessKey`, `tosSecretKey`, and `tosBucket` together.
+`mpa_tool.build_tos_mount_config` always emits access-key authentication. The
+AgentKit SDK supports `TOS_CREDENTIAL_TYPE_IAM_ROLE` without Credentials. The
+existing managed IAM reconciler preserves extra bindings and rejects conflicting
+policy documents. Its platform TOS policy does not grant business-bucket writes.
+
+The user approved bucket-only Studio creation and automatic, additive bucket
+authorization on 2026-10-12. This changes TOS mount authentication, not Studio
+login, Runtime KeyAuth/JWT, or the Worker protocol. The initial implementation
+scope excluded publication. The subsequent user request on 2026-10-12 authorizes
+commit/push, updating the existing cloud Studio and creating a test MPA. Bucket
+creation/public-policy changes and existing-Session migration remain out of scope.
+
+## Requirements and scenarios
+
+### Approved prefix amendment
+
+On 2026-10-12 the user narrowed Studio selection to bucket names beginning with
+`agentkit-platform-`. The selector requests an optional `namePrefix` on the
+existing deployment-resource API; apply exact, case-sensitive prefix filtering
+before search, counts and pagination. Unfiltered/general deployment queries keep
+their behavior. Studio creation rejects other buckets, including stale drafts,
+before cloud calls; standalone CLI/Worker bucket validation remains unchanged.
+No role policies, public-bucket policies or Session paths are changed by this
+amendment. Test allowed/excluded/lookalike names, empty selection, stale drafts,
+query transport and pagination. Manual design review confirms these boundaries.
+The earlier version was deployed as V41 with unchanged environment and matching
+frontend asset hash. No MPA was submitted or bucket policy attached before the
+user requested this amendment; cloud creation/E2E is on hold.
+
+Prefix amendment verification: added 8 Python cases and 3 Vitest cases. The
+related Python suite passes 754/754; dialog tests pass 46/46; full frontend tests
+pass 1,377 Node tests plus 73 Vitest cases. Build, packaged assets (113 files/350
+references), i18n, Ruff, changed-file Pyright and pre-commit pass. Executable diff
+coverage for the four scoped files against HEAD is 100% (Python 22/22, frontend
+10/10), parsed with utree using coverage.py XML and Istanbul Clover XML. The
+initial tests failed on missing prefix behavior; related Studio fixtures were
+updated without relaxing authorization ordering/failure assertions. Full Python
+regression ran again: 6,495 passed, 6 failed, 2 collection errors, 19 skipped,
+2 xfailed and 6 subtests passed. The failing Harness cases and missing optional
+dependencies are the previously reproduced baseline blockers. The local browser
+shows only matching buckets using simulated responses; temporary harness files
+and Vite were removed. No existing defect was reported: this is an approved scope
+change. This is the pre-publication evidence snapshot; the subsequent authorized
+publication and live Role mount verification are pending and will be recorded
+separately from these local results.
+
+- FR-1: Show one optional bucket selector using the existing resource-list hook
+  and DeploymentSelect; retain loading/error/empty/search/pagination/retry,
+  disabled state, keyboard behavior, and cancellation. No TOS AK/SK input.
+- FR-2: A nonempty Studio bucket chooses IAM Role using the actual Worker Tool
+  role. Reject malformed names and legacy nonempty credential submissions safely.
+  Remove credentials from recovered browser drafts. Empty selection retains the
+  server profile (the built-in profile has no mount). CLI/YAML access-key mode remains compatible;
+  explicit `tos-credential-type: iam_role` enables bucket-only managed profiles.
+- FR-3: Before workload-identity/database/network mutations, verify the selected bucket belongs
+  to the deployment account and region, then ensure one stable bucket-specific
+  custom policy and its Global binding on the Worker role. Verify account/trust,
+  policy content, and readback. Preserve unrelated policies/trust. Reject
+  conflicts; recover missing-policy/create/attach races with a bounded timeout.
+- FR-4: Grant `tos:HeadBucket` and `tos:ListBucket` only on the selected bucket;
+  grant `tos:GetObject`, `tos:PutObject`, `tos:AbortMultipartUpload`, and
+  `tos:DeleteObject` only on its `sandbox-session/*` objects. No other buckets,
+  CreateBucket, bucket-policy/ACL changes, KMS grants, or wildcard object scope.
+- FR-5: Emit IAM Role Tool mount without Credentials. Keep `/data/output`, the
+  canonical per-session TOS path, and nonsecret Runtime mount flag/bucket.
+  Reuse validation must reject authentication-mode/role mismatches, not just
+  matching mount paths. Existing Tools and Sessions are never silently mutated.
+- FR-6: Permission, ownership, configuration, and policy conflicts stop creation
+  at the IAM stage with safe localized errors. Cancellation keeps durable IAM
+  objects for retry. Cloud operations use fresh verified deployment credentials.
+
+## Design and compatibility
+
+Add an optional managed Worker credential mode while retaining the historical
+access-key default for CLI. Studio's request contains only `tosBucket` and its
+fixed runner applies IAM Role. Existing task identity/locking/cancellation remain
+unchanged. Reuse existing IAM SDK boundary, canonical document comparison, and
+error allowlist for an independently named bucket policy; do not edit
+`VeADKMPARuntimeAccessV1`. Stable policy names avoid read/merge/write races
+between different buckets. Identical concurrent operations converge.
+
+The policy exposes bucket metadata through ListBucket but object access is
+restricted to session outputs. The shared role grants all of its consumers that
+same prefix access: per-session directories are not tenant authorization.
+SSE-KMS buckets require separately approved key permissions. Old Studio clients
+sending credential fields must refresh; they receive a safe validation error.
+Legacy CLI access-key requests and general-agent deployment remain unchanged.
+
+## Tasks and acceptance
+
+| Requirement | Task | Acceptance | Evidence |
+| --- | --- | --- | --- |
+| FR-1, FR-2 | T-1: UI/API/config | AC-1: bucket-only payload, stale-secret stripping, selection states | config/routes tests and 43 dialog cases pass; isolated browser pass |
+| FR-3, FR-4, FR-6 | T-2: IAM ensure and service wiring | AC-2: exact scoped policy, repeated/concurrent retry, failure/cancel boundaries | IAM/service tests pass |
+| FR-5 | T-3: Tool payload/reuse checks | AC-3: no Credentials and strict mode/role validation; legacy mode unchanged | Tool/worker tests pass |
+| All | T-4: docs/assets/gates | AC-4: targeted/full tests, build/assets, browser states, executable diff coverage >95% | targeted/build/assets/browser/coverage pass; full regression and Pyright have reproduced baseline blockers |
+
+Run affected pytest modules first; then
+`uv run --extra dev pytest -n 2 -m 'not codex_smoke and not piagent_smoke'`,
+`npm --prefix frontend test`, build, asset verification, changed-file
+Ruff/Pyright, i18n, secret scan, and diff whitespace. Coverage is executable
+changed lines, not whole-module coverage. Browser checks use isolated mocked
+provider responses; real IAM/mount E2E is not_run without separate authorization.
+
+## Review and delivery
+
+Manual design review substitutes for the unavailable review-spec skill. It
+confirmed role ownership, additive policy scope, legacy CLI compatibility,
+retry/cancel behavior, localization, and bilingual equivalence. The unavailable
+ui-ux-pro-max skill is replaced by the repository SPEC/Foundation and existing
+selector behavior. Test-skill production-edit restrictions do not apply to the
+user's explicitly authorized feature implementation; tests retain strict
+expected-behavior assertions.
+
+## Verification and change record — 2026-10-12
+
+Changed the Studio request/dialog, managed Worker configuration, IAM reconciliation,
+service ordering and Tool metadata validation; updated both component specs and
+operator guides. No MPA Agent/Worker source changes are needed: existing Session
+mount paths remain unchanged. Reused resource selectors and their existing stylesheet
+instead of creating a new UI system. Temporary browser harness/source files were
+deleted and its local Vite process stopped; production assets were rebuilt.
+
+- **pass:** Python 3.12.12, `tests/integrations/mpa_managed` plus
+  `tests/integrations/test_mpa_tool.py`: 719/719, including 42 net-new cases versus
+  the 677-case baseline. Initial contract tests failed before implementation.
+  With coverage enabled, Pydantic lazy import fails during collection in the
+  plugin environment; explicitly importing `pydantic.RootModel` before
+  `pytest.main([...])` enables the same 719 tests with coverage, without product
+  or dependency changes. The baseline's service collection reproduces this
+  coverage import error too. Python 3.13 was not used as final verification.
+- **pass:** executable changed-line coverage 100%: Python 97/97 from
+  `utree coverage parse` using diff hunks and coverage XML; frontend 9/9 using
+  Istanbul statement-start locations intersected with changed lines. Unchanged
+  source, type-only lines, tests, docs and generated bundles are excluded. This
+  is incremental line coverage, not whole-file or branch coverage.
+- **pass:** `npm --prefix frontend test`: 1,377 Node tests and 70 Vitest cases;
+  `npm --prefix frontend run build`, `check:i18n`, `test:webui-assets` (113 files,
+  350 internal references), Ruff, pre-commit all files and `git diff --check`.
+  Vite reports its existing large-chunk warning.
+- **pass:** real local browser with simulated API responses: normal selection,
+  no TOS key inputs, loading, empty, error/retry, search, pagination, keyboard
+  selection, Chinese search input, close and 390px viewport. This is not live
+  cloud IAM/mount verification or a real OS IME composition test.
+- **fail, baseline reproduced:** full parallel regression: 6,485 passed,
+  6 failed, 2 collection errors, 19 skipped, 2 xfailed, 6 subtests passed. The
+  exact six Harness cases and two self-host Sandbox collection errors recur in
+  an isolated archive of `035387d1` using the same interpreter (60 passed);
+  optional `llama_index`/`anthropic` dependencies are absent. These unrelated
+  dependencies/implementations were not changed or installed to mask the gate.
+- **fail, baseline reproduced:** Pyright with `.venv/bin/python`: 15 SDK
+  call-signature errors in unchanged legacy `mpa_tool.py` calls. A temporary
+  copy of the exact baseline file reports the same 15 errors and was deleted.
+  The other changed production Python files have no Pyright diagnostics.
+- **not_run:** cloud IAM writes, live Role-mounted Session E2E, deployment,
+  image publication, commit and push. Existing Tools/Sessions remain untouched.
+  Shared-role access, existing denies, public bucket policy and KMS restrictions
+  remain operator-visible limitations; a granted policy is not proof of cloud
+  filesystem access.
+
+Implementation review covered fixed bucket-derived names, account/region/trust
+verification, exact resource prefixes, additive idempotency/races, safe failures,
+timeouts/cancellation and legacy CLI compatibility. No existing-policy rewrite or
+global object permission was introduced. Full-suite/typing gates cannot be called
+passing; live acceptance remains separate from this local implementation.
