@@ -4,7 +4,7 @@
 
 - 变更 ID：`studio-mpa-tos-iam`
 - 日期：2026-10-12
-- 状态：implemented；定向检查 verified；基线全量门禁 blocked；云端 not_run
+- 状态：implemented；定向及云端 Role 挂载 verified；Studio V42 已发布；基线全量门禁 blocked
 - 基线：`superops/main`，`035387d1`
 - 契约：[Studio MPA 创建](../../../specs/studio-mpa-creation/README.zh.md)，CON-17。
 
@@ -135,3 +135,42 @@ Foundation 和已有选择器行为。用户明确授权业务功能实现，单
 实现评审检查稳定桶策略名、账号/地域/信任核验、精确对象前缀、增量幂等/并发、
 安全失败、超时/取消及旧 CLI 兼容。未引入已有策略覆盖或全对象权限。全量/类型
 门禁不能表述为通过，云端验收与本地实现仍然独立。
+
+### 已授权的发布与云端验收
+
+2026-10-12 对齐未变化的 `superops/main`，实现提交 `267705ef` 已推送到
+`polaris/czh/studio-mpa-tos-iam-role`。同步后再次通过相关 Python 754 个用例、
+Node 1,377 个及 Vitest 73 个用例；pre-commit、i18n 和前端产物检查通过。
+前述全量基线阻塞仍然存在。
+
+仅更新现有 Studio 代码包至 V42，环境变量哈希和品牌配置保持不变。wheel 中七个
+生产源码文件及全部 WebUI 产物与工作区匹配，远程入口 JS/CSS/logo 哈希与本地
+产物匹配。wheel SHA256：
+`023bf085371cdc7c285b5e60bfcb2dd08e390c1935b7a995475c82c47b925a14`。
+本次仅发布 Studio，未重新构建 Runtime/Worker 镜像。
+
+远程 Studio 可选桶由未过滤的 18 个收窄为 4 个平台前缀桶，并拒绝旧草稿的
+`agentkit-demo`。选 `agentkit-platform-2112682748` 创建测试 MPA
+`role-tos-e2e-20261012-a`，未填写 TOS AK/SK。
+Runtime `r-yex3bbopvkwqejues1lc` 达到 Ready，`/readiness` 返回 200。
+Worker `t-yex3bb51xcwqejuen9oc` 达到 Ready，实际 Role 为
+`IDRoleForArkClawShareAgent`，挂载模式为 `TOS_CREDENTIAL_TYPE_IAM_ROLE`，
+没有 Credentials，读写目录为 `/data/output`，基础挂载路径符合预期。
+IAM 回读确认精确桶/会话对象前缀的自定义策略已绑定。角色原本已有平台桶系统
+策略，增量协调不会收窄既有权限。所选桶没有公开桶策略。
+
+从远程 Studio 提交两段会话，均实际调用沙箱执行命令。GetSession 回读确认分别
+挂载到 `/sandbox-session/tool-{tool_id}/session-{user_session_id}/`。
+两段会话各写入同名 `role-tos-e2e.txt`，内容为不同 A/B 标记；第二段起初没有该
+文件。账号侧独立 TOS 读取（没有账号侧写入）确认两个对象均持久化，B 写入后
+A 内容未变。A 的沙箱结果、TOS 对象和浏览器下载文件 SHA256 均为
+`e762fa20c53dd7394b3f89af8e084e42d486a8e241fa37d68acbd695a17b82a7`；
+B 的沙箱结果和 TOS 对象 SHA256 均为
+`0d797e5173d581880100a21f25a7e00f4990d82b440c4f01f01d78e8776b1e6e`。
+浏览器下载事件等待在 45 秒后超时，但下载随后完成，已核验本地字节；不是接口
+失败。该镜像的 `/ready?scope=execution` 返回 404，执行证明来自实际命令和对象
+读取，不来自这个就绪接口。
+
+测试 MPA 和两个输出对象保留供查看，既有 Tool/Session 未修改，仓库中没有残留
+探索文件。此次验收不覆盖收窄角色既有权限、KMS 加密桶、显式 Deny、独立身份
+或真实业务渠道消息交付。

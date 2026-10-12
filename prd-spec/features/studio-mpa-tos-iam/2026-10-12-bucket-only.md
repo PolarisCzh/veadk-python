@@ -4,7 +4,7 @@
 
 - Change ID: `studio-mpa-tos-iam`
 - Date: 2026-10-12
-- Status: implemented; targeted checks verified; baseline-wide gates blocked; cloud not_run
+- Status: implemented; targeted and live Role mount checks verified; Studio V42 published; baseline-wide gates blocked
 - Base: `superops/main`, `035387d1`
 - Contract: [Studio MPA creation](../../../specs/studio-mpa-creation/README.md), CON-17.
 
@@ -176,3 +176,49 @@ verification, exact resource prefixes, additive idempotency/races, safe failures
 timeouts/cancellation and legacy CLI compatibility. No existing-policy rewrite or
 global object permission was introduced. Full-suite/typing gates cannot be called
 passing; live acceptance remains separate from this local implementation.
+
+### Authorized publication and live acceptance
+
+On 2026-10-12, rebased against unchanged `superops/main` and pushed implementation
+commit `267705ef` to `polaris/czh/studio-mpa-tos-iam-role`. After synchronization,
+754 related Python cases and 1,377 Node plus 73 Vitest cases passed again;
+pre-commit, i18n and packaged assets also passed. The baseline-wide blockers
+recorded above remain unchanged.
+
+Updated only the existing Studio code bundle to V42, preserving its environment
+hash and branding. The packaged wheel's seven production source files and all
+WebUI assets matched the checkout; remote entry JS/CSS/logo hashes matched the
+local package. Wheel SHA256:
+`023bf085371cdc7c285b5e60bfcb2dd08e390c1935b7a995475c82c47b925a14`.
+No new Runtime/Worker image was built for this Studio-only publication.
+
+Remote Studio showed four platform-prefix buckets instead of eighteen unfiltered
+buckets and rejected the old `agentkit-demo` draft. Created the test MPA
+`role-tos-e2e-20261012-a` using `agentkit-platform-2112682748`, with no TOS AK/SK.
+Runtime `r-yex3bbopvkwqejues1lc` became Ready and `/readiness` returned 200.
+Worker `t-yex3bb51xcwqejuen9oc` was Ready with Role
+`IDRoleForArkClawShareAgent`, `TOS_CREDENTIAL_TYPE_IAM_ROLE`, no Credentials,
+read/write `/data/output`, and the expected base mount path. IAM readback confirmed
+the exact bucket/session-prefix custom policy was attached. The role already had
+the platform-bucket system policy; additive reconciliation does not narrow those
+pre-existing permissions. The selected bucket had no public bucket policy.
+
+Two conversations submitted through remote Studio executed actual Sandbox
+commands. GetSession readback confirmed separate
+`/sandbox-session/tool-{tool_id}/session-{user_session_id}/` mounts. Both wrote
+`role-tos-e2e.txt` with different A/B markers; the second initially found no file.
+Independent owner-side TOS reads (no owner-side writes) verified both objects and
+that A remained unchanged after B. A's Sandbox result, TOS object and browser
+download shared SHA256
+`e762fa20c53dd7394b3f89af8e084e42d486a8e241fa37d68acbd695a17b82a7`;
+B's Sandbox result and TOS object shared SHA256
+`0d797e5173d581880100a21f25a7e00f4990d82b440c4f01f01d78e8776b1e6e`.
+The browser download event waiter expired after 45 seconds, but the download
+subsequently completed and its local bytes were verified; this was not an
+endpoint failure. The image does not expose `/ready?scope=execution` (404), so
+execution proof comes from commands and object reads, not that readiness route.
+
+The test MPA and its two output objects are retained for inspection. Existing
+Tools/Sessions were not mutated. No repository exploration files remain. This
+acceptance does not test role permission subtraction, KMS-encrypted buckets,
+explicit Deny policies, independent principals or real business-channel delivery.
