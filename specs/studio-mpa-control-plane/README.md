@@ -133,3 +133,7 @@ Scope correction: website/Feishu and other deferred findings in the entry audit 
 ## MPA details availability (2026-10-09)
 
 MPA Agent details currently expose only Basic information. Other detail tabs and the footer Profile entry are hidden; restored/external focus resolves to Basic before section effects run. This page does not fetch Agent View or Profile status and cannot submit Profile operations. Runtime details, execution flow, chat/delete actions and their authorization remain. General Agent navigation, backend control-plane APIs, and native chat session Profile handling retain their existing contracts.
+
+## General deployment isolation (2026-10-12)
+
+Generic structured/YAML creation defaults to general. Draft presence and quick/traditional UI mode are not MPA intent. Existing targets persist explicit `agentCategory`; legacy `mpaProfileOnly: true` is the only fallback to MPA, and explicit general takes precedence. Only MPA executes or reports Profile/smoke phases, including failure and retry. Local draft filtering follows the same rule. Managed MPA creation retains its dedicated lifecycle. This frontend fix does not migrate existing server Runtime tags.

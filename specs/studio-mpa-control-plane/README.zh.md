@@ -133,3 +133,7 @@ S5-11 真实验证：`VEADK_MPA_P0_LIVE=1 VEADK_MPA_P0_ASYNC_STAGE_TIMEOUT_SECON
 CON-11a 回归验证：会话投影/对账 focused suite 返回 43 passed；完整前端测试返回 1236 passed；TypeScript、i18n、生产构建与 scoped diff 检查均通过。严格真实 Studio 探针在任务完成并额外等待 30 秒后观察到五个有序 `.turn--assistant` 节点，整页重载后仍为相同五个节点。既有可选本地 endpoint 404/503 已单独记录，不影响 transcript 持久展示。
 CON-11b 回归验证：完整前端测试返回 1237 passed；TypeScript、i18n、生产构建与 scoped diff 检查均通过。新的真实 Studio `whoami` 执行观察到父级 `sandbox_task` 和子命令无需刷新即从 running 变为 completed，页面不再有 spinner 或 running activity，最终回答为 `root`；整页刷新后两条终态活动和回答均保持。
 范围修正：上述入口审计中网站/飞书等后续项仅供未来参考，不是本期开发要求。
+
+## 通用部署隔离（2026-10-12）
+
+通用结构化/YAML 创建默认 general。存在草稿或快捷/传统界面模式不代表 MPA 意图。已有目标保存明确的 `agentCategory`；旧 `mpaProfileOnly: true` 是唯一的 MPA 回退依据，明确 general 优先。仅 MPA 执行或报告 Profile/smoke 阶段，包括失败与重试。本地草稿筛选遵循相同规则。托管 MPA 创建保留独立流程。本次前端修复不迁移已有服务端 Runtime 标签。

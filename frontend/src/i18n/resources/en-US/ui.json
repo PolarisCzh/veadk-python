@@ -1993,7 +1993,7 @@
     "routeDescription": "Routing configuration for delivering messages to this Agent.",
     "deliveryDescription": "Observed reply delivery; configuration alone does not confirm delivery.",
     "groupsTitle": "Group access",
-    "groupsDescription": "Allow specific groups and choose how conversations are shared.",
+    "groupsDescription": "Allow specific groups to access this agent.",
     "providerBindingTitle": "Connect {{name}}",
     "providerUnbound": "Connect a {{name}} bot to let users message this agent.",
     "qrGuidance": "Authorize with {{name}}. The Runtime saves the bot credentials and configures the message gateway.",

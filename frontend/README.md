@@ -1593,7 +1593,7 @@ DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在
 
 三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
 
-飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。 新增群权限仅填写群 ID，不再提供会话隔离选项或提交 `groupSessionScope`；新群沿用 Runtime 默认/继承策略，已有群配置及列表中的策略展示保持不变。
 
 配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
 
@@ -1760,7 +1760,7 @@ large collections will need a separate rebuildable query index.
 
 三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
 
-飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。 新增群权限仅填写群 ID，不再提供会话隔离选项或提交 `groupSessionScope`；新群沿用 Runtime 默认/继承策略，已有群配置及列表中的策略展示保持不变。
 
 配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
 
@@ -1841,6 +1841,8 @@ administrator access. A failed or unauthorized account lookup blocks Feishu
 task submission instead of selecting an arbitrary bot. Older runtimes keep the
 single-bot interface. Compatible MPA images must be deployed separately.
 
+Adding a Feishu group only requires its chat ID; Studio no longer exposes a session-isolation selector or sends `groupSessionScope`. New groups use Runtime default/inheritance rules. Existing group configuration and returned scope labels remain unchanged.
+
 Runtime 声明 `multiBotChannels: ["feishu"]` 后，可在“自动化 → 消息渠道 →
 MPA 智能体消息渠道”中选择机器人。扫码或手动添加后，启停、解绑、诊断和群权限
 均按选中的 `appId` 管理；新增不同机器人保留既有绑定。飞书定时任务须选择已启用
@@ -1852,3 +1854,11 @@ Contracts and verification / 契约与验证：
 [channels](../specs/mpa-channels/README.md),
 [tasks](../specs/studio-mpa-cron-tasks/README.md),
 [design](../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.md).
+
+### General and MPA deployment isolation
+
+Generic structured/YAML creation retains the ordinary build, deploy and publish flow (plus selected scaling, evaluation and GitHub options). Only explicitly identified MPA targets apply Profile/smoke phases. Local drafts are filtered by type; legacy drafts without explicit MPA intent default to general. This does not repair cloud Runtime tags written by previous versions.
+
+### 通用与 MPA 部署隔离
+
+通用结构化/YAML 创建保留原构建、部署和发布流程（以及选中的实例配置、评测和 GitHub 选项）。仅明确标识为 MPA 的目标执行 Profile/smoke 阶段。本地草稿按类型筛选；无明确 MPA 意图的旧草稿默认通用。此修改不会修复旧版本已写入的云端 Runtime 标签。

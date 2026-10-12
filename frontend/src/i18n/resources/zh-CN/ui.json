@@ -1993,7 +1993,7 @@
     "routeDescription": "将渠道消息转发给当前智能体的路由配置。",
     "deliveryDescription": "实际观测到的回复投递状态，完成配置不代表已成功投递。",
     "groupsTitle": "群聊权限",
-    "groupsDescription": "添加允许访问的群，并设置群内对话的共享范围。",
+    "groupsDescription": "添加允许访问此智能体的群。",
     "providerBindingTitle": "绑定{{name}}",
     "providerUnbound": "绑定{{name}}机器人，让用户通过消息与此智能体对话。",
     "qrGuidance": "使用{{name}}扫码授权，Runtime 将保存机器人凭据并配置消息网关。",
