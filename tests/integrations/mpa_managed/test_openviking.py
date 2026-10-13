@@ -241,7 +241,7 @@ def test_adapter_uses_current_sts_and_safe_errors(monkeypatch):
             return_value={"Result": {"ResourceID": "ov-test", "Success": True}}
         )
         monkeypatch.setattr(
-            "veadk.integrations.mpa.managed.openviking.volcengine_signed_request",
+            "veadk.utils.volcengine_sign.volcengine_signed_request",
             signed,
         )
         cloud = OpenVikingCloud(source)
@@ -320,7 +320,7 @@ def test_wire_key_is_added_only_to_copy_and_never_to_intent(monkeypatch):
             return_value={"Result": {"ResourceID": "ov-test", "Success": True}}
         )
         monkeypatch.setattr(
-            "veadk.integrations.mpa.managed.openviking.volcengine_signed_request",
+            "veadk.utils.volcengine_sign.volcengine_signed_request",
             signed,
         )
         await OpenVikingCloud(source).create(

@@ -210,3 +210,5 @@ New-layout web preflight/submission uses the server-derived owner/request intern
 ## CON-21: Per-request maximum instances
 
 New editable MPA forms submit strict positive integer `maxInstance`, default 20, in basic information. The value is persisted with request identity, forwarded to the runner and applied as Runtime `MaxInstance`. Below-configured-minimum values fail before acceptance. Submitted values are immutable on retry; omitted/null legacy fields preserve existing fingerprints/profile defaults and are not auto-upgraded. Name-conflict errors use the existing danger/soft Alert with unchanged localized text. General-agent creation and existing Runtime settings are unaffected. See [design](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.md).
+
+OV route registration and configuration inspection must preserve lazy Studio startup: the signing/network helper loads on the first actual OV API call, not when importing the adapter. See [upstream-readiness correction](../../prd-spec/bugfixes/mpa-upstream-readiness/2026-10-13-startup-and-lockfile.md).

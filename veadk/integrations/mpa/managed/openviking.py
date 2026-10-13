@@ -21,8 +21,6 @@ import copy
 import re
 import time
 
-from veadk.utils.volcengine_sign import volcengine_signed_request
-
 from .database import DeploymentError, agent_suffix
 from .diagnostics import CODE_CATEGORIES, classify_error, report
 
@@ -79,6 +77,8 @@ class OpenVikingCloud:
             rejected = False
 
             def request():
+                from veadk.utils.volcengine_sign import volcengine_signed_request
+
                 credential = self.source._credentials()
                 return volcengine_signed_request(
                     request_body=body,

@@ -208,3 +208,5 @@ CON-18 来源修正：仅在没有 OV ID、没有待完成 Runtime 操作、明�
 ## CON-21：本次创建最大实例数
 
 新的可编辑 MPA 表单在基本信息中提交严格正整数 `maxInstance`，默认 20。数值随请求身份保存、传入 runner 并应用为 Runtime `MaxInstance`。小于配置最小值在受理前拒绝。提交后重试数值不可更改；省略/null 的旧字段保留原指纹/配置默认，不自动升级。重名错误复用既有 danger/soft Alert，本地化文案不变。不影响通用创建及已部署 Runtime 设置。见[设计](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.zh.md)。
+
+OV 路由注册及配置检查须保留 Studio 延迟加载启动：签名/网络函数只在首次实际 OV API 调用时加载，不在导入适配器时加载。见[官方 PR 检查修正](../../prd-spec/bugfixes/mpa-upstream-readiness/2026-10-13-startup-and-lockfile.zh.md)。
