@@ -1604,6 +1604,9 @@
     },
     "wakingHint": "Waking the agent. This may take some time.",
     "mpaCreate": {
+      "maxInstance": "Maximum instances",
+      "maxInstanceHelp": "Defaults to 20; this limits the number of Runtime instances during autoscaling.",
+      "maxInstanceInvalid": "Maximum instances must be an integer of at least 1.",
       "name": "Name",
       "namePlaceholder": "e.g. test-agent",
       "nameHelp": "Used as the Runtime name. Use 4–64 letters, numbers, underscores or hyphens.",

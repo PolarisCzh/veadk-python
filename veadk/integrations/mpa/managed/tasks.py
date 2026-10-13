@@ -368,6 +368,8 @@ class CreationTasks:
                     if key in payload
                 },
             }
+            if "maxInstance" in payload:
+                data["maxInstance"] = payload["maxInstance"]
             with self.db() as db:
                 snapshot = json.loads(
                     db.execute(

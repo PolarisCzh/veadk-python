@@ -43,6 +43,7 @@ from veadk.integrations.mpa.managed.config import (
     validate_runtime_name,
     with_creation_images,
     with_creation_resources,
+    with_creation_scaling,
     with_creation_tos,
 )
 from veadk.integrations.mpa.managed.credentials import (
@@ -91,6 +92,7 @@ class CreationRequest(BaseModel):
     agentId: str = Field(default="", pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     name: str = ""
     description: str = Field(default="", max_length=512)
+    maxInstance: int | None = Field(default=None, strict=True, ge=1, le=2**53 - 1)
     region: str = Field(pattern=r"^(cn-[a-z]+|ap-southeast-1)$", max_length=32)
     runtimeImage: str = Field(default="", max_length=1024)
     workerImage: str = Field(default="", max_length=1024)
@@ -225,7 +227,10 @@ def mount_mpa_creation_routes(
             raise HTTPException(422, "Invalid MPA creation request") from None
         try:
             path, config = profile(body.region)
+            config = with_creation_scaling(config, body.maxInstance)
             payload = body.model_dump(mode="json")
+            if payload["maxInstance"] is None:
+                payload.pop("maxInstance")
             if payload["openvikingMode"] == "manual":
                 payload.pop("openvikingMode")
             if payload["businessWorkspaceMode"] == "shared":

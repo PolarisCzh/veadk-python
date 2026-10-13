@@ -1604,6 +1604,9 @@
     },
     "wakingHint": "正在唤醒智能体，可能需要一些时间。",
     "mpaCreate": {
+      "maxInstance": "最大实例数",
+      "maxInstanceHelp": "默认 20，为 Runtime 自动扩容的实例数上限。",
+      "maxInstanceInvalid": "最大实例数必须为大于或等于 1 的整数。",
       "name": "名称",
       "namePlaceholder": "例如 test-agent",
       "nameHelp": "作为 Runtime 名称，支持 4–64 位字母、数字、下划线或连字符。",

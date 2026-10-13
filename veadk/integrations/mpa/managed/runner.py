@@ -22,6 +22,7 @@ from .config import (
     load_profile,
     with_creation_images,
     with_creation_resources,
+    with_creation_scaling,
     with_creation_tos,
 )
 from .diagnostics import classify_error, diagnostic_scope, report
@@ -48,6 +49,7 @@ def run():
             region=data["region"],
             provider=data.get("provider", "volcengine"),
         )
+        profile = with_creation_scaling(profile, data.get("maxInstance"))
         profile = with_creation_images(profile, data.get("images", {}))
         profile = with_creation_resources(profile, data.get("resources", {}))
         profile = with_creation_tos(profile, data.get("tos", {}))

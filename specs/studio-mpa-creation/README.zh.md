@@ -204,3 +204,7 @@ CON-18 来源修正：仅在没有 OV ID、没有待完成 Runtime 操作、明�
 授权名称检查发生于首次下一步、任务接收及新布局云准备前。Runtime、worker 和目标 Workspace 重名时拒绝其他/不明确归属，已核验自身绑定可重试。查询失败/超时明确报错。私有提供商/账号/地域任务快照防止本机并发同名及换凭据重试，仅活跃任务占用名称。只读检查不保证跨主机原子互斥。通用智能体、共享控制资源及 PG 删除策略不变。见[批准设计](../../prd-spec/features/mpa-name-preflight/2026-10-13-runtime-name-and-workspace-labels.zh.md)。
 
 新布局 Web 预检查/提交使用服务端按用户/请求生成的内部身份；传入不同 agent ID 会被拒绝。旧显式 ID 请求保留原契约。
+
+## CON-21：本次创建最大实例数
+
+新的可编辑 MPA 表单在基本信息中提交严格正整数 `maxInstance`，默认 20。数值随请求身份保存、传入 runner 并应用为 Runtime `MaxInstance`。小于配置最小值在受理前拒绝。提交后重试数值不可更改；省略/null 的旧字段保留原指纹/配置默认，不自动升级。重名错误复用既有 danger/soft Alert，本地化文案不变。不影响通用创建及已部署 Runtime 设置。见[设计](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.zh.md)。

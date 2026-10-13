@@ -531,6 +531,20 @@ def with_creation_images(profile: Profile, images: dict[str, str]) -> Profile:
     return replace(profile, managed=managed)
 
 
+def with_creation_scaling(profile: Profile, maximum: int | None) -> Profile:
+    """Apply an explicit request limit without upgrading legacy profile defaults."""
+    if maximum is None:
+        return profile
+    if type(maximum) is not int or not 1 <= maximum <= 2**53 - 1:
+        raise ConfigurationError("Maximum instances must be a positive safe integer")
+    minimum = profile.managed.runtime.min_instance
+    if minimum is not None and maximum < minimum:
+        raise ConfigurationError("Minimum instances exceed maximum instances")
+    managed = profile.managed.model_copy(deep=True)
+    managed.runtime.max_instance = maximum
+    return replace(profile, managed=managed)
+
+
 def with_creation_resources(profile: Profile, resources: dict[str, str]) -> Profile:
     selected = validate_creation_resources(resources)
     managed = profile.managed.model_copy(deep=True)

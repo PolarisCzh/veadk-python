@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Alert } from "@openai/apps-sdk-ui/components/Alert";
 import { Dialog } from "@base-ui/react/dialog";
 import { useTranslation } from "react-i18next";
 import { ModalLayout } from "../../components/layouts/ModalLayout";
@@ -32,6 +33,7 @@ function freshInput(region: string): MpaCreationInput {
     requestId: crypto.randomUUID(),
     name: "",
     description: "",
+    maxInstance: 20,
   };
 }
 
@@ -59,6 +61,7 @@ function initial(region: string): {
       const draft: MpaCreationInput = {
         ...saved.input,
         name: typeof saved.input.name === "string" ? saved.input.name : "",
+        maxInstance: saved.input.maxInstance ?? 20,
       };
       delete draft.agentId;
       delete draft.runtimeImage;
@@ -86,6 +89,9 @@ export function MpaCreateDialog({
   const key = (name: string) => `myAgents.mpaCreate.${name}`;
   const [saved] = useState(() => initial(region));
   const [input, setInput] = useState(saved.input);
+  const [maximumInput, setMaximumInput] = useState(
+    String(saved.input.maxInstance ?? 20),
+  );
   const [openvikingApiKey, setOpenvikingApiKey] = useState("");
   const [step, setStep] = useState(
     saved.submitted || saved.taskId
@@ -118,6 +124,12 @@ export function MpaCreateDialog({
         t(`validation.runtimeName.${problem}`, { ns: "create" }),
       );
   const nameValid = !nameError;
+  const legacyScaling = submitted && input.maxInstance === undefined;
+  const maximumValid =
+    legacyScaling ||
+    (maximumInput.trim() !== "" &&
+      Number.isSafeInteger(Number(maximumInput)) &&
+      Number(maximumInput) >= 1);
   const autoPg = config?.postgresMode === "auto";
   const aidbPg =
     (submitted ? input.businessDatabaseName : config?.businessDatabaseName) ===
@@ -271,7 +283,7 @@ export function MpaCreateDialog({
     return reason instanceof Error ? reason.message : t(key("creationFailed"));
   }
   async function nextStep() {
-    if (lock.current || !nameValid) return;
+    if (lock.current || !nameValid || !maximumValid) return;
     if (step !== 0 || submitted || input.businessDatabaseName !== "aidb") {
       setStep((previous) => previous + 1);
       return;
@@ -311,6 +323,7 @@ export function MpaCreateDialog({
       lock.current ||
       !config?.configured ||
       !nameValid ||
+      !maximumValid ||
       !pgValid ||
       !openvikingValid ||
       !tosValid ||
@@ -331,6 +344,7 @@ export function MpaCreateDialog({
       const value = await startMpaCreation(
         {
           ...input,
+          ...(legacyScaling ? {} : { maxInstance: Number(maximumInput) }),
           ...(input.name === undefined ? {} : { name: input.name.trim() }),
           openvikingApiKey,
         },
@@ -402,6 +416,7 @@ export function MpaCreateDialog({
       /* The new in-memory draft remains usable without browser storage. */
     }
     setInput(nextInput);
+    setMaximumInput("20");
     setOpenvikingApiKey("");
     setStep(0);
     setTaskId(undefined);
@@ -455,7 +470,9 @@ export function MpaCreateDialog({
                             busy ||
                             (index > step &&
                               !submitted &&
-                              (!nameValid || (index === 2 && !pgValid)))
+                              (!nameValid ||
+                                !maximumValid ||
+                                (index === 2 && !pgValid)))
                           }
                           onClick={() => setStep(index)}
                         >
@@ -514,6 +531,41 @@ export function MpaCreateDialog({
                         }
                       />
                     </label>
+
+                    {!legacyScaling && (
+                      <label>
+                        {t(key("maxInstance"))}
+                        <input
+                          name="maxInstance"
+                          type="number"
+                          min={1}
+                          max={Number.MAX_SAFE_INTEGER}
+                          step={1}
+                          value={maximumInput}
+                          disabled={busy || submitted}
+                          required
+                          aria-invalid={!maximumValid}
+                          aria-describedby="mpa-maximum-help"
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setMaximumInput(value);
+                            setInput({ ...input, maxInstance: Number(value) });
+                          }}
+                        />
+                        <p
+                          id="mpa-maximum-help"
+                          role={maximumValid ? undefined : "alert"}
+                        >
+                          {t(
+                            key(
+                              maximumValid
+                                ? "maxInstanceHelp"
+                                : "maxInstanceInvalid",
+                            ),
+                          )}
+                        </p>
+                      </label>
+                    )}
 
                     <section
                       className="mpa-create-plan"
@@ -760,7 +812,15 @@ export function MpaCreateDialog({
                       </p>
                     )}
                     {task.state === "failed" || task.state === "cancelled" ? (
-                      <p>{t(key(task.error || "creationFailed"))}</p>
+                      task.error === "runtimeNameTaken" ? (
+                        <Alert
+                          color="danger"
+                          variant="soft"
+                          description={t(key(task.error))}
+                        />
+                      ) : (
+                        <p>{t(key(task.error || "creationFailed"))}</p>
+                      )
                     ) : null}
                     {task.result?.runtime_id && (
                       <p>Runtime ID：{task.result.runtime_id}</p>
@@ -775,7 +835,9 @@ export function MpaCreateDialog({
                 {autoPg && !pgValid && (
                   <p role="alert">{t(key("pgModeChanged"))}</p>
                 )}
-                {error && <p role="alert">{error}</p>}
+                {error && (
+                  <Alert color="danger" variant="soft" description={error} />
+                )}
                 {running && <p>{t(key("background"))}</p>}
                 {submitted && <p>{t(key("newAgentDescription"))}</p>}
                 {confirmCancel ? (
@@ -833,7 +895,7 @@ export function MpaCreateDialog({
                       <Button
                         disabled={
                           busy ||
-                          (step === 0 && !nameValid) ||
+                          (step === 0 && (!nameValid || !maximumValid)) ||
                           (step === 1 && !pgValid)
                         }
                         onClick={() => void nextStep()}
@@ -848,6 +910,7 @@ export function MpaCreateDialog({
                           loading ||
                           !config?.configured ||
                           !nameValid ||
+                          !maximumValid ||
                           !pgValid ||
                           !openvikingValid ||
                           !tosValid

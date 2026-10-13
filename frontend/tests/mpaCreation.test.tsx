@@ -1205,3 +1205,169 @@ it("aborts a pending name check and ignores its late result on unmount", async (
   expect(host.textContent).toBe("");
   expect(api.startMpaCreation).not.toHaveBeenCalled();
 });
+
+it("new MPA requests default maximum instances to 20 and submit edits", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "fixture",
+    description: "",
+    region: "cn-beijing",
+    taskId: "scaling-task",
+    state: "failed",
+    stage: "worker",
+  });
+  await mount();
+  expect(field("maxInstance").value).toBe("20");
+  await edit("maxInstance", "35");
+  await act(async () => button("next").click());
+  await act(async () => button("previousStep").click());
+  expect(field("maxInstance").value).toBe("35");
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input
+      .maxInstance,
+  ).toBe(35);
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(35);
+  await act(async () => button("previousStep").click());
+  await act(async () => button("previousStep").click());
+  expect(field("maxInstance").disabled).toBe(true);
+});
+
+it.each(["", "0", "-1", "1.5", "9007199254740992"])(
+  "rejects invalid maximum instances %s before Next",
+  async (value) => {
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+    });
+    await mount();
+    await edit("maxInstance", value);
+    expect(field("maxInstance").getAttribute("aria-invalid")).toBe("true");
+    expect(button("next").disabled).toBe(true);
+    expect(api.startMpaCreation).not.toHaveBeenCalled();
+  },
+);
+
+it("highlights duplicate names using the shared danger Alert", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    businessDatabaseName: "aidb",
+    businessWorkspaceMode: "per-agent",
+    postgresMode: "auto",
+  });
+  vi.mocked(api.checkMpaCreationName).mockRejectedValue(
+    new api.MpaCreationRequestError(409, "collision", "runtimeNameTaken"),
+  );
+  await mount();
+  await act(async () => button("next").click());
+  const alert = document.querySelector(
+    '[role="alert"][data-color="danger"][data-variant="soft"]',
+  );
+  expect(alert?.textContent).toContain("myAgents.mpaCreate.runtimeNameTaken");
+});
+
+it("does not add maximum instances to submitted legacy drafts", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId: "legacy",
+        agentId: "mi-old",
+        description: "",
+        region: "cn-beijing",
+      },
+      submitted: true,
+      step: 2,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount(false);
+  await act(async () => submitButton().click());
+  expect(
+    vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance,
+  ).toBeUndefined();
+});
+
+it("restores the maximum from an editable draft and resets it for a new request", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId: "saved-request",
+        name: "saved-name",
+        description: "",
+        region: "cn-beijing",
+        maxInstance: 35,
+      },
+      step: 0,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "saved-request",
+    description: "",
+    region: "cn-beijing",
+    taskId: "restore-task",
+    state: "failed",
+    stage: "worker",
+    maxInstance: 35,
+  });
+  await mount();
+  expect(field("maxInstance").value).toBe("35");
+  await goToFinal();
+  await act(async () => submitButton().click());
+  await act(async () => button("newAgent").click());
+  expect(field("maxInstance").value).toBe("20");
+  expect(field("maxInstance").disabled).toBe(false);
+});
+
+it("keeps an edited maximum when a late creation config arrives", async () => {
+  let resolve!: (value: api.MpaCreationConfig) => void;
+  vi.mocked(api.getMpaCreationConfig).mockReturnValue(
+    new Promise((callback) => {
+      resolve = callback;
+    }),
+  );
+  await mount();
+  await edit("maxInstance", "35");
+  await act(async () => resolve({ configured: true, region: "cn-beijing" }));
+  expect(field("maxInstance").value).toBe("35");
+});
+
+it("highlights a late task-level duplicate name error", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  const task: api.MpaCreationTask = {
+    requestId: "fixture",
+    description: "",
+    region: "cn-beijing",
+    taskId: "late-conflict",
+    state: "failed",
+    stage: "worker",
+    error: "runtimeNameTaken",
+  };
+  vi.mocked(api.startMpaCreation).mockResolvedValue(task);
+  vi.mocked(api.getMpaCreation).mockResolvedValue(task);
+  await mount();
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(
+    document.querySelector(
+      '[role="alert"][data-color="danger"][data-variant="soft"]',
+    )?.textContent,
+  ).toContain("myAgents.mpaCreate.runtimeNameTaken");
+});

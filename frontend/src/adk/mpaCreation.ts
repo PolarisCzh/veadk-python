@@ -8,6 +8,7 @@ export interface MpaCreationInput {
   name?: string;
   agentId?: string;
   description: string;
+  maxInstance?: number;
   region: string;
   runtimeImage?: string;
   workerImage?: string;
