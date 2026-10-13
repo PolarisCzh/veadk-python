@@ -6,6 +6,7 @@ import { Button } from "../../components/primitives/Button";
 import { Textarea } from "../../components/primitives/Textarea";
 import {
   getMpaCreationConfig,
+  checkMpaCreationName,
   startMpaCreation,
   getMpaCreation,
   cancelMpaCreation,
@@ -118,14 +119,25 @@ export function MpaCreateDialog({
       );
   const nameValid = !nameError;
   const autoPg = config?.postgresMode === "auto";
+  const aidbPg =
+    (submitted ? input.businessDatabaseName : config?.businessDatabaseName) ===
+    "aidb";
+  const perAgentPg =
+    (submitted
+      ? input.businessWorkspaceMode
+      : config?.businessWorkspaceMode) === "per-agent";
   const pgValid = autoPg
     ? !input.pgHost && !input.pgPort
     : validPgTarget(input.pgHost, input.pgPort);
-  const openvikingValid = validOpenViking(
-    input.openvikingUrl,
-    input.openvikingResourceId,
-    openvikingApiKey,
-  );
+  const autoOpenviking =
+    cloudProvider === "volcengine" && input.openvikingMode === "auto";
+  const openvikingValid =
+    autoOpenviking ||
+    validOpenViking(
+      input.openvikingUrl,
+      input.openvikingResourceId,
+      openvikingApiKey,
+    );
   const tosValues = [
     input.tosAccessKey,
     input.tosSecretKey,
@@ -183,6 +195,20 @@ export function MpaCreateDialog({
           ) {
             setInput((previous) => ({
               ...previous,
+              ...(value.businessDatabaseName === "aidb"
+                ? { businessDatabaseName: "aidb" as const }
+                : {}),
+              ...(value.businessWorkspaceMode === "per-agent"
+                ? { businessWorkspaceMode: "per-agent" as const }
+                : {}),
+              ...(value.openvikingMode === "auto" &&
+              cloudProvider === "volcengine"
+                ? {
+                    openvikingMode: "auto" as const,
+                    openvikingUrl: undefined,
+                    openvikingResourceId: undefined,
+                  }
+                : {}),
               pgHost:
                 value.postgresMode === "auto"
                   ? ""
@@ -235,6 +261,51 @@ export function MpaCreateDialog({
       clearTimeout(timer);
     };
   }, [taskId, region, revision, t]);
+  function creationError(reason: unknown): string {
+    if (
+      reason instanceof MpaCreationRequestError &&
+      (reason.code === "runtimeNameTaken" ||
+        reason.code === "runtimeNameCheckFailed")
+    )
+      return t(key(reason.code));
+    return reason instanceof Error ? reason.message : t(key("creationFailed"));
+  }
+  async function nextStep() {
+    if (lock.current || !nameValid) return;
+    if (step !== 0 || submitted || input.businessDatabaseName !== "aidb") {
+      setStep((previous) => previous + 1);
+      return;
+    }
+    if (loading || !config?.configured) return;
+    lock.current = true;
+    setBusy(true);
+    setError("");
+    const controller = new AbortController();
+    action.current = controller;
+    try {
+      const result = await checkMpaCreationName(
+        {
+          requestId: input.requestId,
+          agentId: input.agentId,
+          name: input.name?.trim(),
+          region,
+        },
+        controller.signal,
+      );
+      if (!alive.current || controller.signal.aborted) return;
+      if (!result.available) {
+        setError(t(key("runtimeNameTaken")));
+        return;
+      }
+      setStep(1);
+    } catch (reason) {
+      if (alive.current && !controller.signal.aborted)
+        setError(creationError(reason));
+    } finally {
+      lock.current = false;
+      if (alive.current) setBusy(false);
+    }
+  }
   async function submit() {
     if (
       lock.current ||
@@ -250,6 +321,7 @@ export function MpaCreateDialog({
       return;
     lock.current = true;
     setBusy(true);
+    const wasSubmitted = submitted;
     setSubmitted(true);
     setError("");
     persist(taskId);
@@ -273,13 +345,15 @@ export function MpaCreateDialog({
       if (alive.current && !controller.signal.aborted) {
         if (
           reason instanceof MpaCreationRequestError &&
-          (reason.status === 400 || reason.status === 422)
+          (reason.status === 400 ||
+            reason.status === 422 ||
+            (!wasSubmitted &&
+              (reason.code === "runtimeNameTaken" ||
+                reason.code === "runtimeNameCheckFailed")))
         ) {
           setSubmitted(false);
         }
-        setError(
-          reason instanceof Error ? reason.message : t(key("creationFailed")),
-        );
+        setError(creationError(reason));
       }
     } finally {
       lock.current = false;
@@ -307,6 +381,15 @@ export function MpaCreateDialog({
   function startAnotherAgent() {
     const nextInput: MpaCreationInput = {
       ...freshInput(region),
+      ...(config?.businessDatabaseName === "aidb"
+        ? { businessDatabaseName: "aidb" as const }
+        : {}),
+      ...(config?.businessWorkspaceMode === "per-agent"
+        ? { businessWorkspaceMode: "per-agent" as const }
+        : {}),
+      ...(config?.openvikingMode === "auto" && cloudProvider === "volcengine"
+        ? { openvikingMode: "auto" as const }
+        : {}),
       pgHost: autoPg ? "" : (config?.pgHost ?? ""),
       pgPort: autoPg ? "" : (config?.pgPort ?? ""),
     };
@@ -404,9 +487,10 @@ export function MpaCreateDialog({
                         autoComplete="off"
                         aria-invalid={Boolean(nameError)}
                         aria-describedby="mpa-name-help"
-                        onChange={(event) =>
-                          setInput({ ...input, name: event.target.value })
-                        }
+                        onChange={(event) => {
+                          setInput({ ...input, name: event.target.value });
+                          setError("");
+                        }}
                       />
                       <p
                         id="mpa-name-help"
@@ -450,7 +534,11 @@ export function MpaCreateDialog({
                       {t(
                         key(
                           autoPg
-                            ? "pgAutoDescription"
+                            ? aidbPg
+                              ? "pgAidbDescription"
+                              : perAgentPg
+                                ? "pgPerAgentDescription"
+                                : "pgAutoDescription"
                             : config?.postgresLayout === "split-workspaces"
                               ? "pgSplitDescription"
                               : "pgDescription",
@@ -517,12 +605,22 @@ export function MpaCreateDialog({
                 )}
                 {step === 2 && (
                   <>
-                    <p>{t(key("openvikingDescription"))}</p>
+                    <p>
+                      {t(
+                        key(
+                          autoOpenviking
+                            ? "openvikingAutoDescription"
+                            : "openvikingDescription",
+                        ),
+                      )}
+                    </p>
                     <a
                       href={
                         cloudProvider === "byteplus"
                           ? "https://console.byteplus.com/vikingdb/"
-                          : OPENVIKING_CONSOLE_URL
+                          : autoOpenviking
+                            ? "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/"
+                            : OPENVIKING_CONSOLE_URL
                       }
                       target="_blank"
                       rel="noopener noreferrer"
@@ -535,63 +633,69 @@ export function MpaCreateDialog({
                         ),
                       )}
                     </a>
-                    <label>
-                      {t(key("openvikingUrl"))}
-                      <input
-                        name="openvikingUrl"
-                        value={input.openvikingUrl ?? ""}
-                        maxLength={1024}
-                        disabled={busy || submitted}
-                        autoComplete="off"
-                        spellCheck={false}
-                        aria-invalid={!openvikingValid}
-                        onChange={(event) =>
-                          setInput((previous) => ({
-                            ...previous,
-                            openvikingUrl: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t(key("openvikingResourceId"))}
-                      <input
-                        name="openvikingResourceId"
-                        value={input.openvikingResourceId ?? ""}
-                        maxLength={128}
-                        disabled={busy || submitted}
-                        autoComplete="off"
-                        spellCheck={false}
-                        aria-invalid={!openvikingValid}
-                        onChange={(event) =>
-                          setInput((previous) => ({
-                            ...previous,
-                            openvikingResourceId: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t(key("openvikingApiKey"))}
-                      <input
-                        type="password"
-                        name="openvikingApiKey"
-                        value={openvikingApiKey}
-                        maxLength={512}
-                        disabled={
-                          busy || running || task?.state === "succeeded"
-                        }
-                        autoComplete="off"
-                        spellCheck={false}
-                        onChange={(event) =>
-                          setOpenvikingApiKey(event.target.value)
-                        }
-                      />
-                    </label>
-                    {!openvikingValid && (
-                      <p role="alert">{t(key("openvikingInvalid"))}</p>
+                    {autoOpenviking ? (
+                      <p>{t(key("openvikingAutoBilling"))}</p>
+                    ) : (
+                      <>
+                        <label>
+                          {t(key("openvikingUrl"))}
+                          <input
+                            name="openvikingUrl"
+                            value={input.openvikingUrl ?? ""}
+                            maxLength={1024}
+                            disabled={busy || submitted}
+                            autoComplete="off"
+                            spellCheck={false}
+                            aria-invalid={!openvikingValid}
+                            onChange={(event) =>
+                              setInput((previous) => ({
+                                ...previous,
+                                openvikingUrl: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          {t(key("openvikingResourceId"))}
+                          <input
+                            name="openvikingResourceId"
+                            value={input.openvikingResourceId ?? ""}
+                            maxLength={128}
+                            disabled={busy || submitted}
+                            autoComplete="off"
+                            spellCheck={false}
+                            aria-invalid={!openvikingValid}
+                            onChange={(event) =>
+                              setInput((previous) => ({
+                                ...previous,
+                                openvikingResourceId: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          {t(key("openvikingApiKey"))}
+                          <input
+                            type="password"
+                            name="openvikingApiKey"
+                            value={openvikingApiKey}
+                            maxLength={512}
+                            disabled={
+                              busy || running || task?.state === "succeeded"
+                            }
+                            autoComplete="off"
+                            spellCheck={false}
+                            onChange={(event) =>
+                              setOpenvikingApiKey(event.target.value)
+                            }
+                          />
+                        </label>
+                        {!openvikingValid && (
+                          <p role="alert">{t(key("openvikingInvalid"))}</p>
+                        )}
+                        <p>{t(key("openvikingCredentials"))}</p>
+                      </>
                     )}
-                    <p>{t(key("openvikingCredentials"))}</p>
                     <fieldset className="mpa-create-tos">
                       <legend>{t(key("tosTitle"))}</legend>
                       <p>{t(key("tosDescription"))}</p>
@@ -732,7 +836,8 @@ export function MpaCreateDialog({
                           (step === 0 && !nameValid) ||
                           (step === 1 && !pgValid)
                         }
-                        onClick={() => setStep((previous) => previous + 1)}
+                        onClick={() => void nextStep()}
+                        loading={busy}
                       >
                         {t(key("next"))}
                       </Button>

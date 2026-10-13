@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import FastAPI, HTTPException, Request
@@ -49,6 +50,28 @@ from veadk.integrations.mpa.managed.credentials import (
     load_volcengine_credentials,
 )
 from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError, owner_key
+from veadk.integrations.mpa.managed.names import NameCheckError, check_creation_name
+from veadk.integrations.mpa.managed.runtime import RuntimeCloud
+
+
+def creation_agent_id(identity, request_id, explicit=""):
+    return (
+        explicit
+        or "mi-" + uuid5(NAMESPACE_URL, f"veadk:mpa:{identity}:{request_id}").hex[:24]
+    )
+
+
+class NameCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requestId: UUID
+    name: str = Field(min_length=4, max_length=64)
+    agentId: str = Field(default="", pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    region: str = Field(pattern=r"^(cn-[a-z]+|ap-southeast-1)$", max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value):
+        return validate_runtime_name(value)
 
 
 def _studio_task_path(provider="volcengine") -> Path:
@@ -76,6 +99,9 @@ class CreationRequest(BaseModel):
     openvikingUrl: str = Field(default="", max_length=1024)
     openvikingResourceId: str = Field(default="", max_length=128)
     openvikingApiKey: str = Field(default="", max_length=512, repr=False)
+    openvikingMode: Literal["manual", "auto"] = "manual"
+    businessWorkspaceMode: Literal["shared", "per-agent"] = "shared"
+    businessDatabaseName: Literal["", "aidb"] = ""
     tosAccessKey: str = Field(default="", max_length=256, repr=False)
     tosSecretKey: str = Field(default="", max_length=256, repr=False)
     tosBucket: str = Field(default="", max_length=256)
@@ -142,6 +168,48 @@ def mount_mpa_creation_routes(
         except ConfigurationError as exc:
             return {"configured": False, "region": region, "error": str(exc)}
 
+    async def check_name(body, config, studio_owner):
+        identity = owner_key(studio_owner)
+        agent_id = creation_agent_id(identity, body.requestId)
+        if body.agentId and body.agentId != agent_id:
+            raise ConfigurationError(
+                "New dedicated requests require the server-generated creation identity"
+            )
+        account = await check_creation_name(
+            config,
+            RuntimeCloud(
+                region=config.region,
+                credential_file=config.managed.credential_file,
+                provider=provider,
+            ),
+            agent_id=agent_id,
+            name=body.name,
+            owner=studio_owner,
+        )
+        scope = {"provider": provider, "account": account, "region": config.region}
+        get_tasks().check_name(
+            identity, {"requestId": str(body.requestId), "name": body.name}, scope
+        )
+        return scope
+
+    @app.post("/web/mpa-creation/name-check")
+    async def name_availability(request: Request, body: NameCheckRequest):
+        studio_owner = owner(request)
+        try:
+            _, config = profile(body.region)
+            config = with_creation_resources(
+                config,
+                {"businessWorkspaceMode": "per-agent", "businessDatabaseName": "aidb"},
+            )
+            await check_name(body, config, studio_owner)
+            return {"available": True}
+        except NameCheckError as exc:
+            raise HTTPException(
+                409 if exc.key == "runtimeNameTaken" else 503, {"code": exc.key}
+            ) from None
+        except ConfigurationError as exc:
+            raise HTTPException(400, str(exc)) from None
+
     @app.post("/web/mpa-creation/tasks", status_code=202)
     async def create(request: Request):
         studio_runtime_owner = owner(request)
@@ -158,15 +226,16 @@ def mount_mpa_creation_routes(
         try:
             path, config = profile(body.region)
             payload = body.model_dump(mode="json")
+            if payload["openvikingMode"] == "manual":
+                payload.pop("openvikingMode")
+            if payload["businessWorkspaceMode"] == "shared":
+                payload.pop("businessWorkspaceMode")
+            if not payload["businessDatabaseName"]:
+                payload.pop("businessDatabaseName")
             if provider == "byteplus":
                 payload["provider"] = provider
             if not payload["agentId"]:
-                payload["agentId"] = (
-                    "mi-"
-                    + uuid5(
-                        NAMESPACE_URL, f"veadk:mpa:{identity}:{body.requestId}"
-                    ).hex[:24]
-                )
+                payload["agentId"] = creation_agent_id(identity, body.requestId)
             if not payload["name"]:
                 # Keep the exact input shape of already-submitted legacy tasks.
                 payload.pop("name")
@@ -174,7 +243,12 @@ def mount_mpa_creation_routes(
                 field: payload.pop(field)
                 for field in ("tosAccessKey", "tosSecretKey", "tosBucket")
             }
-            with_creation_resources(config, payload)
+            selected_config = with_creation_resources(config, payload)
+            name_options = {}
+            if body.businessDatabaseName == "aidb":
+                name_options["name_scope"] = await check_name(
+                    body, selected_config, studio_runtime_owner
+                )
             openviking_api_key = payload.pop("openvikingApiKey")
             resources = validate_creation_resources(
                 {**payload, "openvikingApiKey": openviking_api_key}
@@ -200,7 +274,12 @@ def mount_mpa_creation_routes(
                 secrets={"openvikingApiKey": openviking_api_key},
                 studio_runtime_owner=studio_runtime_owner,
                 tos=tos,
+                **name_options,
             )
+        except NameCheckError as exc:
+            raise HTTPException(
+                409 if exc.key == "runtimeNameTaken" else 503, {"code": exc.key}
+            ) from None
         except ConfigurationError as exc:
             raise HTTPException(400, str(exc)) from None
         except TaskError as exc:

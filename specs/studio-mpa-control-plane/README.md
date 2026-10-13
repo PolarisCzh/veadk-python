@@ -2,7 +2,7 @@
 
 - Component ID: `studio-mpa-control-plane`
 - Status: `draft` for remaining P0 amendments; baseline Phase 1, part of Phase 2, and P0 Studio slices through S5-12 browser validation are implemented
-- Revision: 2026-10-12
+- Revision: 2026-10-13
 - Chinese: [README.zh.md](README.zh.md)
 - PRD: [MPA Studio Turn Control and Resource Workspace](../../prd-spec/features/mpa-studio-control-plane/2026-09-13-mpa-studio-control-plane-design.md)
 
@@ -145,3 +145,9 @@ This change supersedes the Profile prerequisite in the deletion contract: previe
 Deletion session listing/cleanup sends Studio’s server-authenticated `owner_id` as `x-user-id`, matching chat/scheduled tasks; browser identity headers are not used. Optional Runtime client `user_id` preserves existing caller compatibility.
 
 Delete preview has a 25-second deadline and returns HTTP 504 / `mpa_delete_preview_timeout` on expiry. Reference discovery reads at most 4 Runtime details concurrently. Deletion requests may reuse identity verification for unchanged credentials; rotation/account changes require re-verification. Creation retains default per-call verification.
+
+### CON-30a: MPA deletion deadline and confirmation
+
+Explicit MPA browser deletion waits up to 180 seconds; general deletion retains 30 seconds. A TimeoutError triggers one authorized, no-store, 30-second read-only confirmation for the same Runtime ID/region. Success requires structured cloud Runtime NotFound plus complete list absence; authorization 404, still-listed runtimes, incomplete pagination and query errors cannot mean success. Unconfirmed results retain a localized error and existing retry UI. No automatic delete replay or change to cleanup order is permitted. See [approved timeout fix](../../prd-spec/bugfixes/mpa-delete-timeout/2026-10-13-confirm-delete-outcome.md).
+
+Confirmation is restricted to server-authorized MPA delete attempts with the same Studio owner, Runtime, region and private deployment-credential fingerprint. Contexts are bounded to 1024 entries and expire after one hour; restart/rotation/missing context fails closed.

@@ -26,6 +26,8 @@ from .config import (
 )
 from .diagnostics import classify_error, diagnostic_scope, report
 from .iam import IamError
+from .openviking import OpenVikingError
+from .names import NameCheckError
 from .service import provision
 
 
@@ -55,6 +57,7 @@ def run():
                     profile,
                     agent_id=data["agentId"],
                     runtime_name=data.get("name", ""),
+                    expected_account=data.get("expectedAccount", ""),
                     owner=data["owner"],
                     studio_runtime_owner=data.get("studioRuntimeOwner"),
                     description=data["description"],
@@ -80,7 +83,11 @@ def run():
     except Exception as error:
         report("provision", classify_error(error))
         # Error text can contain SDK request payloads, URLs and credentials.
-        emit(error=error.key if isinstance(error, IamError) else "creationFailed")
+        emit(
+            error=error.key
+            if isinstance(error, (IamError, OpenVikingError, NameCheckError))
+            else "creationFailed"
+        )
         return 1
 
 

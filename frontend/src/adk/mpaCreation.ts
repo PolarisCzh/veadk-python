@@ -15,6 +15,9 @@ export interface MpaCreationInput {
   pgPort?: string;
   openvikingUrl?: string;
   openvikingResourceId?: string;
+  openvikingMode?: "manual" | "auto";
+  businessWorkspaceMode?: "shared" | "per-agent";
+  businessDatabaseName?: "aidb";
   tosAccessKey?: string;
   tosSecretKey?: string;
   tosBucket?: string;
@@ -47,6 +50,9 @@ export interface MpaCreationConfig {
   pgHost?: string;
   pgPort?: string;
   postgresMode?: "auto";
+  businessWorkspaceMode?: "per-agent";
+  businessDatabaseName?: "aidb";
+  openvikingMode?: "auto";
   postgresMigrationRequired?: boolean;
   postgresLayout?: "split-workspaces";
   adminWorkspaceName?: string;
@@ -57,6 +63,7 @@ export class MpaCreationRequestError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "MpaCreationRequestError";
@@ -83,6 +90,7 @@ async function request<T>(
       typeof value.detail === "string"
         ? value.detail
         : `HTTP ${response.status}`,
+      typeof value.detail?.code === "string" ? value.detail.code : undefined,
     );
   }
   return response.json() as Promise<T>;
@@ -96,6 +104,10 @@ export const startMpaCreation = (
   input: MpaCreationRequest,
   signal: AbortSignal,
 ) => request<MpaCreationTask>("tasks", signal, input);
+export const checkMpaCreationName = (
+  input: Pick<MpaCreationInput, "requestId" | "name" | "agentId" | "region">,
+  signal: AbortSignal,
+) => request<{ available: boolean }>("name-check", signal, input);
 export const getMpaCreation = (id: string, signal: AbortSignal) =>
   request<MpaCreationTask>(`tasks/${encodeURIComponent(id)}`, signal);
 export const cancelMpaCreation = (id: string, signal: AbortSignal) =>

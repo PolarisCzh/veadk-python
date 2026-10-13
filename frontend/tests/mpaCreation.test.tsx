@@ -10,11 +10,13 @@ vi.mock("../src/adk/mpaCreation", () => ({
     constructor(
       readonly status: number,
       message: string,
+      readonly code?: string,
     ) {
       super(message);
     }
   },
   getMpaCreationConfig: vi.fn(),
+  checkMpaCreationName: vi.fn(),
   startMpaCreation: vi.fn(),
   getMpaCreation: vi.fn(),
   cancelMpaCreation: vi.fn(),
@@ -1027,4 +1029,179 @@ it("keeps BytePlus preparation errors visible and allows rechecking", async () =
   });
   await act(async () => button("reload").click());
   expect(button("submit").disabled).toBe(false);
+});
+
+it("prepares OpenViking automatically without manual fields and preserves retry mode", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockRejectedValue(new Error("Response lost"));
+  await mount();
+  await goToFinal();
+  expect(document.querySelector('input[name="openvikingUrl"]')).toBeNull();
+  expect(document.querySelector('input[name="openvikingApiKey"]')).toBeNull();
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoDescription",
+  );
+  await act(async () => button("submit").click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining({
+      openvikingMode: "auto",
+      openvikingApiKey: "",
+    }),
+    expect.any(AbortSignal),
+  );
+  const saved = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
+  expect(saved.input.openvikingMode).toBe("auto");
+  expect(saved.input.openvikingApiKey).toBeUndefined();
+});
+
+it("new requests pin per-agent PG", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+  } as api.MpaCreationConfig);
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "unused",
+    description: "",
+    region: "cn-beijing",
+    taskId: "pg-task",
+    state: "failed",
+    stage: "business_workspace",
+  });
+  await mount();
+  await act(async () => button("next").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.pgPerAgentDescription",
+  );
+  await act(async () => button("next").click());
+  await act(async () => submitButton().click());
+  expect(
+    vi.mocked(api.startMpaCreation).mock.calls[0][0].businessWorkspaceMode,
+  ).toBe("per-agent");
+});
+
+it("does not upgrade submitted shared PG requests when new defaults arrive", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId: "legacy",
+        agentId: "mi-old",
+        description: "",
+        region: "cn-beijing",
+      },
+      submitted: true,
+      step: 2,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount(false);
+  await act(async () => button("previousStep").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.pgAutoDescription",
+  );
+  expect(document.body.textContent).not.toContain(
+    "myAgents.mpaCreate.pgPerAgentDescription",
+  );
+  await act(async () => button("next").click());
+  await act(async () => submitButton().click());
+  expect(
+    vi.mocked(api.startMpaCreation).mock.calls[0][0].businessWorkspaceMode,
+  ).toBeUndefined();
+});
+
+it("checks a new aidb request name before moving to the database step", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+    businessDatabaseName: "aidb",
+  } as api.MpaCreationConfig);
+  vi.mocked(api.checkMpaCreationName).mockRejectedValue(
+    new api.MpaCreationRequestError(409, "collision", "runtimeNameTaken"),
+  );
+  await mount();
+  await act(async () => button("next").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.runtimeNameTaken",
+  );
+  expect(field("name").disabled).toBe(false);
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+  expect(document.body.textContent).not.toContain(
+    "myAgents.mpaCreate.pgAidbDescription",
+  );
+  await edit("name", "free-name");
+  vi.mocked(api.checkMpaCreationName).mockResolvedValue({ available: true });
+  await act(async () => button("next").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.pgAidbDescription",
+  );
+});
+
+it("pins aidb in a new submission and keeps duplicate POST errors editable", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+    businessDatabaseName: "aidb",
+  } as api.MpaCreationConfig);
+  vi.mocked(api.checkMpaCreationName).mockResolvedValue({ available: true });
+  vi.mocked(api.startMpaCreation).mockRejectedValue(
+    new api.MpaCreationRequestError(409, "collision", "runtimeNameTaken"),
+  );
+  await mount();
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining({
+      businessDatabaseName: "aidb",
+      businessWorkspaceMode: "per-agent",
+    }),
+    expect.any(AbortSignal),
+  );
+  await act(async () => button("previousStep").click());
+  await act(async () => button("previousStep").click());
+  expect(field("name").disabled).toBe(false);
+});
+
+it("aborts a pending name check and ignores its late result on unmount", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+    businessDatabaseName: "aidb",
+  });
+  let resolve!: (value: { available: boolean }) => void;
+  vi.mocked(api.checkMpaCreationName).mockReturnValue(
+    new Promise((callback) => {
+      resolve = callback;
+    }),
+  );
+  await mount();
+  await act(async () => {
+    button("next").click();
+    button("next").click();
+  });
+  expect(api.checkMpaCreationName).toHaveBeenCalledTimes(1);
+  const signal = vi.mocked(api.checkMpaCreationName).mock.calls[0][1]!;
+  expect(signal.aborted).toBe(false);
+  await act(async () => root.render(null));
+  expect(signal.aborted).toBe(true);
+  await act(async () => resolve({ available: true }));
+  expect(host.textContent).toBe("");
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
 });

@@ -225,6 +225,10 @@ async def _ensure_worker(
         matches = await retry_worker("find_worker", lambda: cloud.find(request["Name"]))
         if matches:
             if len(matches) != 1 or not record.get("worker_token"):
+                if record.get("business_database_name") == "aidb":
+                    from .names import NameCheckError
+
+                    raise NameCheckError("runtimeNameTaken")
                 raise DeploymentError(
                     "Worker name collision without a recorded creation intent"
                 )

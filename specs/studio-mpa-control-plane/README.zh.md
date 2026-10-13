@@ -145,3 +145,9 @@ CON-11b 回归验证：完整前端测试返回 1237 passed；TypeScript、i18n�
 删除会话查询和清理使用 Studio 服务端已认证的 `owner_id` 作为 `x-user-id`，与聊天/定时任务保持一致；不使用浏览器传入的身份头。Runtime client 的可选 `user_id` 参数维持旧调用兼容。
 
 删除预览限时 25 秒，超时返回 HTTP 504 / `mpa_delete_preview_timeout`；引用发现最多并发读取 4 个 Runtime 详情。删除请求内相同凭据可复用身份核验，轮换/账号变化必须重新检查；创建流程保持默认逐次核验。
+
+### CON-30a：MPA 删除超时与确认
+
+明确选择的 MPA 浏览器删除最多等待 180 秒；通用删除保持 30 秒。TimeoutError 后，对同一 Runtime ID/地域执行一次已授权、no-store、限时 30 秒的只读确认。仅结构化云端 Runtime NotFound 且完整列表不存在时成功；授权 404、仍在列表、分页不完整和查询失败不能视作成功。无法确认时保留本地化错误及既有重试 UI。不自动重复删除，不改变清理顺序。见[已批准超时修复](../../prd-spec/bugfixes/mpa-delete-timeout/2026-10-13-confirm-delete-outcome.zh.md)。
+
+结果确认仅限服务端已授权的 MPA 删除尝试，须匹配 Studio 用户、Runtime、地域及私有部署凭据指纹。上下文最多 1024 条、一小时到期；重启/轮换/上下文缺失均失败关闭。

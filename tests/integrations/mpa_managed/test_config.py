@@ -639,3 +639,23 @@ def test_runtime_override_validation_is_safe(tmp_path, monkeypatch, settings):
     with pytest.raises(ConfigurationError) as error:
         load_profile(profile_file(tmp_path, monkeypatch, runtime=settings))
     assert "private-test-value" not in str(error.value)
+
+
+def test_automatic_openviking_is_explicit_and_preserves_old_requests():
+    profile = load_studio_profile(region="cn-beijing")
+    assert profile.summary()["openvikingMode"] == "auto"
+    assert with_creation_resources(profile, {}).managed.openviking.mode == "manual"
+    selected = with_creation_resources(profile, {"openvikingMode": "auto"})
+    assert selected.managed.openviking.mode == "auto"
+    assert selected.openviking_enabled is True
+    assert not any(k.startswith("OPENVIKING_") for k in selected.managed.runtime.env)
+    with pytest.raises(ConfigurationError):
+        with_creation_resources(
+            profile,
+            {
+                "openvikingMode": "auto",
+                "openvikingUrl": "https://example.test",
+                "openvikingResourceId": "ov-test",
+                "openvikingApiKey": "test-key",
+            },
+        )

@@ -193,6 +193,34 @@ class RuntimeCloud:
             seen.add(token)
         raise DeploymentError("Runtime discovery exceeded pagination limit")
 
+    async def find_runtimes(self, name):
+        """Find exact names without loading unrelated Runtime environments."""
+        from agentkit.sdk.runtime.types import ListRuntimesRequest
+
+        matches, tokens, identifiers = [], set(), set()
+        token = None
+        for _ in range(1000):
+            result = await self.call(
+                "list_runtimes", ListRuntimesRequest(PageSize=100, NextToken=token)
+            )
+            for item in result.get("AgentKitRuntimes") or []:
+                if not item.get("Name") or not item.get("RuntimeId"):
+                    raise DeploymentError(
+                        "Runtime name discovery returned incomplete metadata"
+                    )
+                if item["Name"] == name and item["RuntimeId"] not in identifiers:
+                    matches.append(item)
+                    identifiers.add(item["RuntimeId"])
+            token = result.get("NextToken")
+            if not token:
+                return matches
+            if token in tokens:
+                raise DeploymentError(
+                    "Runtime name discovery repeated pagination token"
+                )
+            tokens.add(token)
+        raise DeploymentError("Runtime name discovery exceeded pagination limit")
+
     async def create_skill_space(self, request):
         from agentkit.sdk.skills.types import CreateSkillSpaceRequest
 
@@ -470,7 +498,9 @@ class AgentRuntimeDeployer:
             current = await self.cloud.get(runtime_id) if runtime_id else None
             from veadk.integrations.mpa.managed.database import database_name
 
-            name = database_name(account, self.region, agent_id)
+            name = getattr(
+                self.databases, "business_database_name", ""
+            ) or database_name(account, self.region, agent_id)
             if current:
                 # Check agent/database/role before even adopting network resources.
                 identity_template = {

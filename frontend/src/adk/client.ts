@@ -5882,16 +5882,42 @@ export async function deleteRuntime(
   region: string,
   opts: { agentCategory?: "general" | "mpa"; mpaInstanceId?: string } = {},
 ): Promise<void> {
-  const res = await apiFetch("/web/delete-runtime", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      runtimeId,
-      region,
-      agentCategory: opts.agentCategory,
-      mpaInstanceId: opts.mpaInstanceId,
-    }),
-  });
+  const isMpa = opts.agentCategory === "mpa";
+  let res: Response;
+  try {
+    res = await apiFetch(
+      "/web/delete-runtime",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runtimeId,
+          region,
+          agentCategory: opts.agentCategory,
+          mpaInstanceId: opts.mpaInstanceId,
+        }),
+      },
+      {},
+      isMpa ? 180_000 : DEFAULT_REQUEST_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (!isMpa || !(error instanceof Error) || error.name !== "TimeoutError")
+      throw error;
+    try {
+      const params = new URLSearchParams({ runtimeId, region });
+      const status = await apiFetch(
+        `/web/mpa-runtime-deletion-status?${params.toString()}`,
+        { cache: "no-store" },
+      );
+      if (status.ok) {
+        const result: { deleted?: unknown } | null = await status.json();
+        if (result?.deleted === true) return;
+      }
+    } catch {
+      // An unavailable confirmation must not imply successful deletion.
+    }
+    throw new Error(adkT("client.mpaDeleteUnconfirmed"));
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(t || adkT("client.deleteFailed", { status: res.status }));

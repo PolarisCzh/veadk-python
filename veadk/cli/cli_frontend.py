@@ -10778,6 +10778,42 @@ def _run_frontend_server(
             logger.error(f"list my-runtimes failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
+    from frontend.server.mpa_deletion_status import mount_mpa_deletion_status
+
+    def _mpa_deletion_runtime_page(region: str, token: str) -> dict:
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        ak, sk, svc_token = _resolve_ve_credentials()
+        client = AgentkitRuntimeClient(
+            access_key=ak, secret_key=sk, session_token=svc_token or "", region=region
+        )
+        response = client.list_runtimes(
+            _rt.ListRuntimesRequest(PageSize=100, NextToken=token or None)
+        )
+        return {
+            "AgentKitRuntimes": [
+                item.model_dump(by_alias=True, exclude_none=True)
+                for item in response.agent_kit_runtimes or []
+            ],
+            "NextToken": response.next_token,
+        }
+
+    def _mpa_deletion_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return str(principal.owner_id if principal is not None else "local")
+
+    remember_mpa_deletion = mount_mpa_deletion_status(
+        app,
+        owner=_mpa_deletion_owner,
+        get_runtime=lambda request, runtime_id, region: _authorized_runtime(
+            request, runtime_id, region, managed_only=True, coded_access_error=True
+        ),
+        list_page=_mpa_deletion_runtime_page,
+        credentials=_resolve_ve_credentials,
+        region=_coerce_cloud_region,
+    )
+
     @app.post("/web/delete-runtime")
     async def _web_delete_runtime(request: Request):
         """Delete an AgentKit runtime by id (used by the '管理 Agent' view)."""
@@ -10797,6 +10833,7 @@ def _run_frontend_server(
             AgentReviewService.require_editable(runtime)
             runtime_tags = _runtime_tags(runtime)
             if _runtime_agent_category(runtime, runtime_tags) == "mpa":
+                remember_mpa_deletion(request, runtime_id, region)
                 await _delete_mpa_runtime_with_preview_guard(
                     request=request,
                     runtime_id=runtime_id,

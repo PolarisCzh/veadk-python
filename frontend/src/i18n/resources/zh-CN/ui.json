@@ -1698,12 +1698,30 @@
         "verifying": "等待智能体就绪",
         "admin_workspace": "准备管理 PG Workspace",
         "business_workspace": "准备业务 PG Workspace",
-        "admin_database": "初始化共享管理库"
+        "admin_database": "初始化共享管理库",
+        "openviking": "准备 OpenViking 库",
+        "openviking_key": "准备 OpenViking 访问凭证"
       },
       "back": "继续创建",
       "pgAutoDescription": "使用 VeADK 部署账号自动创建或复用两个 PG Workspace：mpa_admin_workspace / mpa_admin_db 存放共享资源记录，业务 Workspace 供多个智能体共用，每个智能体拥有独立业务库。无需填写 PG 连接信息，提交创建后开始准备。",
+      "pgPerAgentDescription": "创建流程会复用共享管理 Workspace，并为此智能体准备独立的业务 PG Workspace 和数据库。已有任务重试沿用原数据库。",
+      "pgAidbDescription": "创建流程会复用共享管理 Workspace，并为此智能体准备独立业务 Workspace 和 aidb 数据库。业务 Workspace 使用 mpa_agent_<智能体名称> 命名。已有任务重试沿用原数据库。",
+      "runtimeNameTaken": "该名称已被 Runtime、沙箱模板、业务 Workspace 或正在创建的任务占用，请更换名称。",
+      "runtimeNameCheckFailed": "暂时无法检查名称，请确认资源查询权限和网络后重试。",
       "pgModeChanged": "此创建任务使用旧的 PG 配置，不能直接切换为自动模式重试。请联系管理员确认已有资源和任务后重新创建。",
-      "pgMigrationRequired": "检测到旧共享注册库。请先将共享资源记录迁移到 mpa_admin_workspace / mpa_admin_db，并完成现有 Runtime 的注册库地址切换；完成后点击“重新检查”。"
+      "pgMigrationRequired": "检测到旧共享注册库。请先将共享资源记录迁移到 mpa_admin_workspace / mpa_admin_db，并完成现有 Runtime 的注册库地址切换；完成后点击“重新检查”。",
+      "openvikingAutoDescription": "将为此智能体创建独立 OpenViking 库，使用默认模型并自动准备连接配置。",
+      "openvikingAutoBilling": "企业版按量计费，建库成功后开始计费。重试此智能体将复用已登记的库。",
+      "openvikingPermissionDenied": "无权准备 OpenViking。请检查部署账号的建库、查询和获取 API Key 权限后重试。",
+      "openvikingConfigurationConflict": "OpenViking 的归属或配置与此智能体不一致，请核对登记的库后重试。",
+      "openvikingCreateUnknown": "OpenViking 创建结果尚未确认。请管理员核对云端库并补齐登记的资源 ID 后重试；不会自动重复建库。",
+      "openvikingNotReady": "OpenViking 仍在初始化，请稍后重试此智能体，将继续使用同一个库。",
+      "openvikingResourceFailed": "OpenViking 初始化失败，请在控制台检查库状态及模型配置后重试。",
+      "openvikingResourceMissing": "未找到已登记的 OpenViking 库或默认用户，请检查绑定及资源状态后重试。",
+      "openvikingModelConfigurationRejected": "平台拒绝了默认模型配置或建库参数，请检查 OpenViking 模型可用性及账号开通情况后重试。",
+      "openvikingUnavailable": "暂时无法连接 OpenViking，请检查服务及网络后重试。",
+      "openvikingInvalidResponse": "OpenViking 返回的配置不完整或无效，请检查库及默认用户后重试。",
+      "openvikingQuotaExceeded": "OpenViking 配额不足或请求过于频繁，请调整配额或稍后重试此智能体。"
     }
   },
   "skillCenter": {
