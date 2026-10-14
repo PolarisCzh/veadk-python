@@ -3266,6 +3266,7 @@ export interface DeploymentResourceQuery {
   namespace?: string;
   workspaceId?: string;
   search?: string;
+  namePrefix?: string;
   pageNumber?: number;
   pageSize?: number;
 }
@@ -3286,6 +3287,7 @@ export async function listDeploymentResources(
   if (query.namespace) params.set("namespace", query.namespace);
   if (query.workspaceId) params.set("workspaceId", query.workspaceId);
   if (query.search) params.set("search", query.search);
+  if (query.namePrefix) params.set("namePrefix", query.namePrefix);
   if (query.pageNumber) params.set("pageNumber", String(query.pageNumber));
   if (query.pageSize) params.set("pageSize", String(query.pageSize));
   const response = await apiFetch(

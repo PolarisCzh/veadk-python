@@ -104,9 +104,7 @@ class CreationRequest(BaseModel):
     openvikingMode: Literal["manual", "auto"] = "manual"
     businessWorkspaceMode: Literal["shared", "per-agent"] = "shared"
     businessDatabaseName: Literal["", "aidb"] = ""
-    tosAccessKey: str = Field(default="", max_length=256, repr=False)
-    tosSecretKey: str = Field(default="", max_length=256, repr=False)
-    tosBucket: str = Field(default="", max_length=256)
+    tosBucket: str = Field(default="", max_length=63)
 
     @field_validator("runtimeImage", "workerImage")
     @classmethod
@@ -244,10 +242,7 @@ def mount_mpa_creation_routes(
             if not payload["name"]:
                 # Keep the exact input shape of already-submitted legacy tasks.
                 payload.pop("name")
-            tos = {
-                field: payload.pop(field)
-                for field in ("tosAccessKey", "tosSecretKey", "tosBucket")
-            }
+            tos = {"tosBucket": payload.pop("tosBucket")}
             selected_config = with_creation_resources(config, payload)
             name_options = {}
             if body.businessDatabaseName == "aidb":

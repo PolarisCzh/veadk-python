@@ -17,6 +17,18 @@ MPA 基本信息新增可编辑的“最大实例数”，默认 20，对应 Run
 保留原配置。名称重复时以红色错误框突出原提示，通用智能体创建不变。
 参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
 
+MPA session output storage accepts only optional buckets beginning with `agentkit-platform-`. The
+Worker Tool uses IAM Role without TOS keys; creation additively grants that role
+bucket metadata access and object read/write/delete under `sandbox-session/*`.
+The shared role's other consumers receive the same access. Existing Tools,
+Sessions and public bucket policies are not changed. Empty selection preserves
+server defaults. See [the managed setup](../veadk/integrations/mpa/managed/README.md#tos-output-storage-with-iam-role).
+
+MPA 会话输出存储仅可选以 `agentkit-platform-` 开头的桶，Worker Tool 使用 IAM Role，不再要求 TOS 密钥。
+创建时增量补齐角色的桶元数据权限和 `sandbox-session/*` 对象读写/删除权限；共享
+角色的其他使用者同样获得该权限。不修改已有 Tool、会话或桶公开策略；空选择保留
+服务端默认配置。参见[托管配置](../veadk/integrations/mpa/managed/README.zh.md#使用-iam-role-的-tos-输出存储)。
+
 The MPA creation wizard supports clicking step headings and returning to earlier
 settings after restoring a submitted draft. Submitted settings remain read-only;
 retry retains the original identity. Any submitted draft offers New Agent to

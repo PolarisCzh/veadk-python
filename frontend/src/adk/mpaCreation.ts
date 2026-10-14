@@ -19,8 +19,6 @@ export interface MpaCreationInput {
   openvikingMode?: "manual" | "auto";
   businessWorkspaceMode?: "shared" | "per-agent";
   businessDatabaseName?: "aidb";
-  tosAccessKey?: string;
-  tosSecretKey?: string;
   tosBucket?: string;
 }
 export interface MpaCreationRequest extends MpaCreationInput {
@@ -29,7 +27,7 @@ export interface MpaCreationRequest extends MpaCreationInput {
 export interface MpaCreationTask
   extends Omit<
     MpaCreationInput,
-    "tosAccessKey" | "tosSecretKey" | "tosBucket"
+    "tosBucket"
   > {
   taskId: string;
   state: "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
