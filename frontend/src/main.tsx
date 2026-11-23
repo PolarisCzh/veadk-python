@@ -11,6 +11,7 @@ import ReactDOM from "react-dom/client";
 import { MotionConfig } from "motion/react";
 import { PhotoProvider } from "react-photo-view";
 import App from "./App";
+import { FeishuBotInvitePage, feishuBotInvitePath } from "./ui/FeishuBotInvite";
 import "react-photo-view/dist/react-photo-view.css";
 
 // Keep the existing Studio light by default, including portalled components.
@@ -68,7 +69,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         prefers-reduced-motion setting (transforms/opacity are stilled). */}
     <MotionConfig reducedMotion="user">
       <PhotoProvider maskOpacity={0.9}>
-        <App />
+        {window.location.pathname === feishuBotInvitePath ? <FeishuBotInvitePage /> : <App />}
       </PhotoProvider>
     </MotionConfig>
   </React.StrictMode>,

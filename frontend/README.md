@@ -491,6 +491,24 @@ or an answer follow. General agents retain their existing per-turn behavior.
   enables the Feishu channel. The Feishu App Secret is used only for the current
   deployment and never enters generated source, workflow, documentation, or
   logs; cloud credentials remain GitHub Secrets or Runtime environment variables.
+- **Private Feishu bot invitations**: a Studio administrator can select an MPA
+  Runtime under Automations → Message channels → Feishu, then open Private bot
+  invitation to set the number of bindings (1–100) and validity (1–168 hours).
+  Recipients open the same link and confirm their own Feishu QR code without
+  signing into Studio. Each successful binding uses one slot and creates a
+  private Bot on the selected Runtime. Use a Runtime with scanner-based ownership
+  to give each scanner the Bot's personal authorization eligibility.
+  In-progress QR codes reserve capacity. An expired QR frees a slot once the
+  Runtime confirms expiry. If registration is uncertain, Studio keeps the slot
+  reserved and rechecks the original binding and configured App ID. Revoking a
+  link closes it to new or resumed scans. A binding request already sent to the
+  Runtime can finish.
+  The feature uses Studio's shared `VEADK_STUDIO_TOS_BUCKET` and
+  `VEADK_STUDIO_TOS_REGION` with private conditional writes. Hosts with upstream
+  authentication must allow anonymous access to `GET /feishu-bot-invite`,
+  `POST /web/feishu-bot-invite/redeem`, and
+  `POST /web/feishu-bot-invite/status`. Keep the administrator endpoints under
+  the regular Studio authentication policy.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
 - **Runtime session artifacts**: in a chat that supports Studio Tools, select
   `studio_write_artifact` for the current session and ask the Agent to save a

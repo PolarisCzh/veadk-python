@@ -39,6 +39,16 @@ _ACCOUNTS_ENDPOINTS = {
     "lark": f"https://accounts.larksuite.com{_REGISTRATION_PATH}",
 }
 _VERIFICATION_HOSTS = {"open.feishu.cn", "open.larksuite.com"}
+
+
+def render_qr_data_url(value: str) -> str:
+    image = qrcode.make(value)
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
 _DEFAULT_EXPIRES_IN_SECONDS = 600
 _DEFAULT_POLL_INTERVAL_SECONDS = 5
 _MAX_POLL_INTERVAL_SECONDS = 60
@@ -106,7 +116,7 @@ class FeishuAppRegistrationProvider:
 
         return ProviderSession(
             provider_id=device_code,
-            qr_code_data_url=self._qr_code_data_url(verification_url),
+            qr_code_data_url=render_qr_data_url(verification_url),
             expires_at=expires_at,
         )
 
@@ -244,14 +254,6 @@ class FeishuAppRegistrationProvider:
         query["user_code"] = [user_code]
         query["from"] = ["studio"]
         return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
-
-    @staticmethod
-    def _qr_code_data_url(value: str) -> str:
-        image = qrcode.make(value)
-        buffer = io.BytesIO()
-        image.save(buffer, "PNG")
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/png;base64,{encoded}"
 
     @staticmethod
     def _positive_int(value: object, default: int) -> int:

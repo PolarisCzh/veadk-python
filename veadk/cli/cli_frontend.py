@@ -3082,6 +3082,7 @@ def _run_frontend_server(
         create_feishu_bot_setup_service(),
         _feishu_setup_owner,
     )
+    from frontend.server.mpa import feishu_invites
 
     def _require_studio_admin(request: Request) -> None:
         if not _request_role(request).is_admin:
@@ -12841,6 +12842,49 @@ def _run_frontend_server(
             invoke_runtime=_invoke_website_integration_runtime,
         )
 
+        def _authorize_feishu_invite(
+            request: Request, runtime_id: str, region: str
+        ) -> str:
+            if not _request_role(request).is_admin:
+                raise HTTPException(status_code=403, detail="invite_admin_required")
+            if region != _coerce_cloud_region(region):
+                raise HTTPException(status_code=400, detail="invite_invalid_region")
+            runtime = _authorized_runtime_for_connection(request, runtime_id, region)
+            if _runtime_agent_category(runtime, _runtime_tags(runtime)) != "mpa":
+                raise HTTPException(status_code=400, detail="invite_requires_mpa")
+            _, key, auth_type, _ = _resolve_runtime_conn(runtime_id, region, runtime)
+            if not key or auth_type != "key_auth":
+                raise HTTPException(
+                    status_code=400, detail="invite_requires_runtime_key"
+                )
+            principal = _current_principal(request)
+            return principal.owner_id if principal else "studio-local-admin"
+
+        async def _invoke_invite_runtime(
+            invite: feishu_invites.Invitation, binding_id: str | None
+        ) -> dict[str, Any]:
+            try:
+                return await feishu_invites.call_runtime_binding(
+                    invite, binding_id, resolve=_resolve_runtime_conn
+                )
+            except Exception:  # noqa: BLE001 - redact upstream cloud and Runtime failures
+                raise HTTPException(
+                    status_code=502, detail="binding_unavailable"
+                ) from None
+
+        invite_storage = StudioStorageConfig.from_env(provider)
+        feishu_invites.mount_routes(
+            app,
+            feishu_invites.InviteStore(
+                invite_storage.bucket,
+                create_tos_client_factory(invite_storage, _resolve_ve_credentials),
+            )
+            if invite_storage.configured
+            else None,
+            authorize=_authorize_feishu_invite,
+            runtime=_invoke_invite_runtime,
+        )
+
     @app.api_route(
         "/web/runtime-proxy/{runtime_id}/{path:path}",
         methods=["GET", "HEAD", "POST", "PATCH", "PUT", "DELETE"],
@@ -14024,6 +14068,7 @@ def _run_frontend_server(
                 app,
                 oauth2_config,
                 exempt_paths={
+                    *(feishu_invites.PUBLIC_PATHS if studio else ()),
                     "/",
                     "/index.html",
                     "/favicon.ico",
@@ -16677,6 +16722,15 @@ def _run_frontend_server(
 
         @app.get("/{path:path}")
         async def _spa_fallback(path: str, request: Request):
+            if studio and request.url.path == feishu_invites.PAGE:
+                return HTMLResponse(
+                    _index_html,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Referrer-Policy": "no-referrer",
+                        "X-Robots-Tag": "noindex, nofollow",
+                    },
+                )
             # Resolve and confine to the UI directory — a path like
             # "../../etc/passwd" must NOT escape `webui` (arbitrary file read).
             candidate = (webui / path).resolve()

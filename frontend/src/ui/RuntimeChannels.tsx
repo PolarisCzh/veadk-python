@@ -19,6 +19,7 @@ import {
 } from "../adk/wecomAuthorization";
 import { SourceCloseIcon } from "./icons/SourceWorkspaceIcons";
 import { FeishuAccounts, type FeishuAccountPanelProps } from "./FeishuAccounts";
+import { FeishuBotInviteAdmin } from "./FeishuBotInvite";
 import "./RuntimeChannels.css";
 
 const allProviders = ["feishu", "lark", "wecom", "dingtalk"] as const;
@@ -93,6 +94,9 @@ export function RuntimeChannels(props: {
           {...props}
           provider={provider}
         />
+        {provider === "feishu" && props.cloudProvider !== "byteplus" && (
+          <FeishuBotInviteAdmin runtimeId={props.runtimeId} region={props.region} />
+        )}
       </div>
     </div>
   );

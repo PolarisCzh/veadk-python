@@ -1,0 +1,47 @@
+.feishu-invite-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.feishu-invite-card {
+  box-sizing: border-box;
+  width: min(100%, 380px);
+  padding: 24px;
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  text-align: center;
+  background: hsl(var(--panel));
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+}
+.feishu-invite-card h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.feishu-invite-card p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+}
+.feishu-invite-card img {
+  max-width: 100%;
+  height: auto;
+}
+.feishu-invite-admin,
+.feishu-invite-admin label {
+  display: grid;
+  gap: 8px;
+}
+.feishu-invite-admin form {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.feishu-invite-admin form input {
+  width: 110px;
+}
